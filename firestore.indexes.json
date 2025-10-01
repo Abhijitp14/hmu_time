@@ -1,0 +1,191 @@
+{
+  "indexes": [
+    {
+      "collectionGroup": "attendance",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {
+          "fieldPath": "empCode",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "date",
+          "order": "DESCENDING"
+        }
+      ]
+    },
+    {
+      "collectionGroup": "attendance",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {
+          "fieldPath": "empCode",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "checkInTime",
+          "order": "DESCENDING"
+        }
+      ]
+    },
+    {
+      "collectionGroup": "attendance",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {
+          "fieldPath": "empCode",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "activeMonths",
+          "arrayConfig": "CONTAINS"
+        }
+      ]
+    },
+    {
+      "collectionGroup": "leaveRequests",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {
+          "fieldPath": "employeeId",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "createdAt",
+          "order": "DESCENDING"
+        }
+      ]
+    },
+    {
+      "collectionGroup": "leaveRequests",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {
+          "fieldPath": "status",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "createdAt",
+          "order": "DESCENDING"
+        }
+      ]
+    },
+    {
+      "collectionGroup": "users",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {
+          "fieldPath": "role",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "isActive",
+          "order": "ASCENDING"
+        }
+      ]
+    },
+    {
+      "collectionGroup": "notifications",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {
+          "fieldPath": "userId",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "createdAt",
+          "order": "DESCENDING"
+        }
+      ]
+    },
+    {
+      "collectionGroup": "auditLogs",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {
+          "fieldPath": "userId",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "timestamp",
+          "order": "DESCENDING"
+        }
+      ]
+    },
+    {
+      "collectionGroup": "auditLogs",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {
+          "fieldPath": "action",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "timestamp",
+          "order": "DESCENDING"
+        }
+      ]
+    },
+    {
+      "collectionGroup": "biometric_punches",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {
+          "fieldPath": "empCode",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "punchTime",
+          "order": "ASCENDING"
+        }
+      ]
+    },
+    {
+      "collectionGroup": "biometric_punches",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {
+          "fieldPath": "syncId",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "processed",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "punchTime",
+          "order": "ASCENDING"
+        }
+      ]
+    },
+    {
+      "collectionGroup": "biometric_syncs",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {
+          "fieldPath": "empCode",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "syncedAt",
+          "order": "DESCENDING"
+        }
+      ]
+    },
+    {
+      "collectionGroup": "biometric_syncs",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {
+          "fieldPath": "empCode",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "syncedAt",
+          "order": "ASCENDING"
+        }
+      ]
+    }
+  ],
+  "fieldOverrides": []
+}

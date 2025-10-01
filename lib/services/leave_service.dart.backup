@@ -1,0 +1,782 @@
+import 'package:cloud_functions/cloud_functions.dart';
+import 'package:firebase_auth/firebase_auth.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
+import '../models/leave_model.dart';
+import '../models/user_model.dart';
+
+class LeaveService {
+  final FirebaseFunctions _functions = FirebaseFunctions.instance;
+  final FirebaseAuth _auth = FirebaseAuth.instance;
+
+  /// Apply for leave with policy validation
+  Future<LeaveApplicationResult> applyForLeave({
+    required LeaveType leaveType,
+    required DateTime startDate,
+    required DateTime endDate,
+    required String reason,
+    required AppUser user,
+    String? medicalCertificate,
+    String? selectedOptionalHolidayId, // New parameter for optional holidays
+  }) async {
+    try {
+      print('📝 LeaveService: Starting leave application...');
+      
+      final currentUser = _auth.currentUser;
+      if (currentUser == null) {
+        throw Exception('User not authenticated');
+      }
+
+      // Validate leave eligibility and policy rules
+      final validation = await _validateLeaveRequest(
+        leaveType: leaveType,
+        startDate: startDate,
+        endDate: endDate,
+        user: user,
+        selectedOptionalHolidayId: selectedOptionalHolidayId,
+      );
+
+      if (!validation.isValid) {
+        return LeaveApplicationResult(
+          success: false,
+          error: validation.errorMessage!,
+          suggestedLeaveType: validation.suggestedLeaveType,
+        );
+      }
+
+      final totalDays = LeaveRequest.calculateLeaveDays(startDate, endDate);
+      final finalLeaveType = validation.suggestedLeaveType ?? leaveType;
+      
+      // Calculate days to deduct from balance based on leave type policy
+      final daysToDeduct = LeaveRequest.calculateLeaveDeduction(startDate, endDate, finalLeaveType);
+      
+      print('📊 LeaveService: Total days: $totalDays, Days to deduct: $daysToDeduct (Leave type: ${finalLeaveType.value})');
+      print('📤 LeaveService: Calling Firebase Function for leave application...');
+      final callable = _functions.httpsCallable('applyForLeave');
+      
+      final requestData = {
+        'leaveType': finalLeaveType.value,
+        'startDate': startDate.toIso8601String(),
+        'endDate': endDate.toIso8601String(),
+        'totalDays': totalDays, // Keep for display/record purposes
+        'daysToDeduct': daysToDeduct, // New field for balance deduction
+        'reason': reason,
+        'medicalCertificate': medicalCertificate,
+        'selectedOptionalHolidayId': selectedOptionalHolidayId,
+      };
+      
+      print('📤 LeaveService: Request data: $requestData');
+      final result = await callable.call(requestData);
+      
+      print('📥 LeaveService: Received response: ${result.data}');
+      
+      return LeaveApplicationResult.fromMap(result.data);
+    } on FirebaseFunctionsException catch (e) {
+      print('❌ LeaveService: Firebase Functions Error: ${e.code} - ${e.message}');
+      return LeaveApplicationResult(
+        success: false,
+        error: e.message ?? 'Failed to apply for leave',
+      );
+    } catch (e) {
+      print('❌ LeaveService: General error: $e');
+      return LeaveApplicationResult(
+        success: false,
+        error: e.toString(),
+      );
+    }
+  }
+
+  /// Approve a leave request
+  Future<bool> approveLeaveRequest({
+    required String empCode,
+    required String leaveType,
+    required String requestId,
+    String? comments,
+  }) async {
+    try {
+      print('🟢 LeaveService: Approving leave request $requestId for employee $empCode');
+      
+      final callable = _functions.httpsCallable('approveLeaveRequest');
+      final result = await callable.call({
+        'empCode': empCode,
+        'leaveType': leaveType,
+        'requestId': requestId,
+        'comments': comments,
+      });
+      
+      if (result.data['success'] == true) {
+        print('✅ LeaveService: Leave request approved successfully');
+        return true;
+      } else {
+        throw Exception(result.data['message'] ?? 'Failed to approve leave request');
+      }
+    } catch (e) {
+      print('❌ LeaveService: Error approving leave request: $e');
+      throw Exception('Failed to approve leave request: $e');
+    }
+  }
+
+  /// Reject a leave request
+  Future<bool> rejectLeaveRequest({
+    required String empCode,
+    required String leaveType,
+    required String requestId,
+    required String reason,
+  }) async {
+    try {
+      print('🔴 LeaveService: Rejecting leave request $requestId for employee $empCode');
+      
+      final callable = _functions.httpsCallable('rejectLeaveRequest');
+      final result = await callable.call({
+        'empCode': empCode,
+        'leaveType': leaveType,
+        'requestId': requestId,
+        'reason': reason,
+      });
+      
+      if (result.data['success'] == true) {
+        print('✅ LeaveService: Leave request rejected successfully');
+        return true;
+      } else {
+        throw Exception(result.data['message'] ?? 'Failed to reject leave request');
+      }
+    } catch (e) {
+      print('❌ LeaveService: Error rejecting leave request: $e');
+      throw Exception('Failed to reject leave request: $e');
+    }
+  }
+
+  /// Get all employees for filtering
+  Future<List<Map<String, String>>> getAllEmployees() async {
+    try {
+      final snapshot = await FirebaseFirestore.instance
+          .collection('users')
+          .where('role', isEqualTo: 'employee')
+          .get();
+      
+      return snapshot.docs.map((doc) {
+        final data = doc.data();
+        return {
+          'id': (data['empCode'] ?? doc.id).toString(),  // Use empCode as ID for filtering
+          'name': (data['name'] ?? 'Unknown').toString(),
+          'department': (data['department'] ?? 'N/A').toString(),
+          'email': (data['email'] ?? '').toString(),
+          'empCode': (data['empCode'] ?? '').toString(),
+        };
+      }).toList();
+    } catch (e) {
+      print('Error getting all employees: $e');
+      return [];
+    }
+  }
+
+  /// Apply for leave with policy validation
+  Future<LeaveApplicationResult> applyForLeave({
+    required LeaveType leaveType,
+    required DateTime startDate,
+    required DateTime endDate,
+    required String reason,
+    required AppUser user,
+    String? medicalCertificate,
+    String? selectedOptionalHolidayId, // New parameter for optional holidays
+  }) async {
+    try {
+      print('📝 LeaveService: Starting leave application...');
+      
+      final currentUser = _auth.currentUser;
+      if (currentUser == null) {
+        throw Exception('User not authenticated');
+      }
+
+      // Validate leave eligibility and policy rules
+      final validation = await _validateLeaveRequest(
+        leaveType: leaveType,
+        startDate: startDate,
+        endDate: endDate,
+        user: user,
+        selectedOptionalHolidayId: selectedOptionalHolidayId,
+      );
+
+      if (!validation.isValid) {
+        return LeaveApplicationResult(
+          success: false,
+          error: validation.errorMessage!,
+          suggestedLeaveType: validation.suggestedLeaveType,
+        );
+      }
+
+      final totalDays = LeaveRequest.calculateLeaveDays(startDate, endDate);
+      final finalLeaveType = validation.suggestedLeaveType ?? leaveType;
+      
+      // Calculate days to deduct from balance based on leave type policy
+      final daysToDeduct = LeaveRequest.calculateLeaveDeduction(startDate, endDate, finalLeaveType);
+      
+      print('📊 LeaveService: Total days: $totalDays, Days to deduct: $daysToDeduct (Leave type: ${finalLeaveType.value})');
+      print('📤 LeaveService: Calling Firebase Function for leave application...');
+      final callable = _functions.httpsCallable('applyForLeave');
+      
+      final requestData = {
+        'leaveType': finalLeaveType.value,
+        'startDate': startDate.toIso8601String(),
+        'endDate': endDate.toIso8601String(),
+        'totalDays': totalDays, // Keep for display/record purposes
+        'daysToDeduct': daysToDeduct, // New field for balance deduction
+        'reason': reason,
+        'medicalCertificate': medicalCertificate,
+        'selectedOptionalHolidayId': selectedOptionalHolidayId,
+      };
+      
+      print('📤 LeaveService: Request data: $requestData');
+      final result = await callable.call(requestData);
+      
+      print('📥 LeaveService: Received response: ${result.data}');
+      
+      return LeaveApplicationResult.fromMap(result.data);
+    } on FirebaseFunctionsException catch (e) {
+      print('❌ LeaveService: Firebase Functions Error: ${e.code} - ${e.message}');
+      return LeaveApplicationResult(
+        success: false,
+        error: e.message ?? 'Failed to apply for leave',
+      );
+    } catch (e) {
+      print('❌ LeaveService: General error: $e');
+      return LeaveApplicationResult(
+        success: false,
+        error: e.toString(),
+      );
+    }
+  }
+
+  /// Get employee's leave requests
+  Future<List<LeaveRequest>> getMyLeaveRequests() async {
+    try {
+      print('🔍 LeaveService: Fetching leave requests...');
+      
+      final currentUser = _auth.currentUser;
+      if (currentUser == null) {
+        throw Exception('User not authenticated');
+      }
+
+      final callable = _functions.httpsCallable('getMyLeaveRequests');
+      final result = await callable.call();
+      
+      print('📥 LeaveService: Received leave requests: ${result.data}');
+      
+      if (result.data['success'] == true) {
+        final List<dynamic> requestsData = result.data['requests'] ?? [];
+        return requestsData
+            .map((data) => LeaveRequest.fromMap(
+                Map<String, dynamic>.from(data['data']), 
+                data['id']))
+            .toList();
+      } else {
+        throw Exception(result.data['message'] ?? 'Failed to fetch leave requests');
+      }
+    } catch (e) {
+      print('❌ LeaveService: Error fetching leave requests: $e');
+      throw Exception('Failed to fetch leave requests: $e');
+    }
+  }
+
+  /// Get available optional holidays
+  Future<List<OptionalHoliday>> getAvailableOptionalHolidays() async {
+    try {
+      print('📞 LeaveService: Calling getOptionalHolidays function...');
+      
+      final result = await _functions.httpsCallable('getOptionalHolidays').call();
+      
+      print('✅ LeaveService: Function call successful');
+      print('� LeaveService: Raw result type: ${result.runtimeType}');
+      print('� LeaveService: Raw result data type: ${result.data.runtimeType}');
+      print('� LeaveService: Raw result: ${result.data}');
+      
+      if (result.data != null && result.data is Map && result.data['holidays'] != null) {
+        final holidaysList = result.data['holidays'] as List;
+        print('🏖️ LeaveService: Found ${holidaysList.length} optional holidays');
+        
+        // Convert the holidays to OptionalHoliday objects
+        return holidaysList.map<OptionalHoliday>((holiday) {
+          final holidayMap = Map<String, dynamic>.from(holiday as Map);
+          final holidayData = Map<String, dynamic>.from(holidayMap['data'] as Map);
+          
+          // Handle Firestore Timestamp or string date conversion
+          DateTime holidayDate;
+          if (holidayData['date'] is Map && holidayData['date']['_seconds'] != null) {
+            // Firestore Timestamp format
+            final dateMap = Map<String, dynamic>.from(holidayData['date'] as Map);
+            final seconds = dateMap['_seconds'] as int;
+            holidayDate = DateTime.fromMillisecondsSinceEpoch(seconds * 1000);
+          } else if (holidayData['date'] is String) {
+            // ISO string format
+            holidayDate = DateTime.parse(holidayData['date']);
+          } else {
+            // Fallback to current date
+            holidayDate = DateTime.now();
+          }
+          
+          // Handle createdAt timestamp
+          DateTime createdAt;
+          if (holidayData['createdAt'] is Map && holidayData['createdAt']['_seconds'] != null) {
+            final createdAtMap = Map<String, dynamic>.from(holidayData['createdAt'] as Map);
+            final seconds = createdAtMap['_seconds'] as int;
+            createdAt = DateTime.fromMillisecondsSinceEpoch(seconds * 1000);
+          } else {
+            createdAt = DateTime.now();
+          }
+          
+          return OptionalHoliday(
+            id: holidayMap['id'] as String,
+            name: holidayData['name'] as String,
+            description: holidayData['description'] as String? ?? '',
+            date: holidayDate,
+            isActive: true,
+            createdAt: createdAt,
+            createdBy: 'admin', // Default value, could be enhanced later
+          );
+        }).where((holiday) {
+          // Only show upcoming holidays (today and future dates)
+          final today = DateTime.now();
+          final holidayDateOnly = DateTime(holiday.date.year, holiday.date.month, holiday.date.day);
+          final todayDateOnly = DateTime(today.year, today.month, today.day);
+          return !holidayDateOnly.isBefore(todayDateOnly);
+        }).toList();
+      } else {
+        print('⚠️ LeaveService: No holidays found in response or wrong format');
+        print('📊 LeaveService: Available keys: ${result.data is Map ? (result.data as Map).keys.toList() : 'N/A'}');
+        return [];
+      }
+    } catch (e, stackTrace) {
+      print('❌ LeaveService: Error fetching optional holidays: $e');
+      print('📍 LeaveService: Stack trace: $stackTrace');
+      return [];
+    }
+  }
+
+  /// Cancel a pending leave request
+  Future<bool> cancelLeaveRequest(String requestId, String leaveType) async {
+    try {
+      print('❌ LeaveService: Cancelling leave request: $requestId (type: $leaveType)');
+      
+      final currentUser = _auth.currentUser;
+      if (currentUser == null) {
+        throw Exception('User not authenticated');
+      }
+
+      final callable = _functions.httpsCallable('cancelLeaveRequest');
+      final result = await callable.call({
+        'requestId': requestId,
+        'leaveType': leaveType,
+      });
+      
+      print('📥 LeaveService: Cancel response: ${result.data}');
+      
+      return result.data['success'] == true;
+    } catch (e) {
+      print('❌ LeaveService: Error cancelling leave request: $e');
+      return false;
+    }
+  }
+
+  /// Validate leave request against company policy
+  Future<LeaveValidationResult> _validateLeaveRequest({
+    required LeaveType leaveType,
+    required DateTime startDate,
+    required DateTime endDate,
+    required AppUser user,
+    String? selectedOptionalHolidayId,
+  }) async {
+    print('✅ LeaveService: Validating leave request...');
+    
+    // Basic date validation - Skip for Sick Leave since it can occur anytime
+    if (leaveType != LeaveType.sick && !LeaveRequest.isValidDateRange(startDate, endDate)) {
+      return LeaveValidationResult(
+        isValid: false,
+        errorMessage: 'Cannot apply for leave in the past',
+      );
+    }
+
+    if (startDate.isAfter(endDate)) {
+      return LeaveValidationResult(
+        isValid: false,
+        errorMessage: 'Start date cannot be after end date',
+      );
+    }
+
+    // Calculate leave days
+    final totalDays = LeaveRequest.calculateLeaveDays(startDate, endDate);
+    if (totalDays == 0) {
+      return LeaveValidationResult(
+        isValid: false,
+        errorMessage: 'Leave request must be for at least one working day',
+      );
+    }
+
+    // Check if employee has sufficient tenure for leave type
+    final joiningDate = user.joiningDate;
+    if (joiningDate == null) {
+      return LeaveValidationResult(
+        isValid: false,
+        errorMessage: 'Joining date not found. Please contact HR.',
+      );
+    }
+
+    final monthsWorked = _calculateMonthsWorked(joiningDate, DateTime.now());
+    
+    // Policy Rule: CL and PL usable after 6 months, SL and Optional Holidays from day one
+    if ((leaveType == LeaveType.casual || leaveType == LeaveType.paid) && 
+        monthsWorked < 6) {
+      return LeaveValidationResult(
+        isValid: false,
+        errorMessage: '${leaveType.displayName} can only be used after 6 months of service',
+      );
+    }
+
+    // Policy Rule: PL minimum 2 days at a time
+    if (leaveType == LeaveType.paid && totalDays == 1) {
+      // Convert 1-day PL to CL if balance available
+      final casualBalance = user.casualLeave;
+      if (casualBalance >= 1) {
+        return LeaveValidationResult(
+          isValid: true,
+          suggestedLeaveType: LeaveType.casual,
+        );
+      } else {
+        return LeaveValidationResult(
+          isValid: false,
+          errorMessage: 'Paid Leave requires minimum 2 days. 1-day request converted to Casual Leave but insufficient CL balance.',
+        );
+      }
+    }
+
+    // Policy Rule: Optional Holiday - must be for predefined holidays only and single day
+    if (leaveType == LeaveType.optionalHoliday) {
+      if (totalDays != 1) {
+        return LeaveValidationResult(
+          isValid: false,
+          errorMessage: 'Optional Holiday can only be applied for single days',
+        );
+      }
+      
+      if (selectedOptionalHolidayId == null) {
+        return LeaveValidationResult(
+          isValid: false,
+          errorMessage: 'Please select a specific optional holiday from the available list',
+        );
+      }
+      
+      // Additional validation would check if the selected holiday date matches the request date
+      // This will be implemented in the Firebase function
+    }
+
+    // Check leave balance - For Sick Leave, check against deduction amount (always 1), not total days
+    final currentBalance = user.leaveBalance[leaveType.balanceKey] ?? 0;
+    final daysToDeduct = LeaveRequest.calculateLeaveDeduction(startDate, endDate, leaveType);
+    
+    if (currentBalance < daysToDeduct) {
+      return LeaveValidationResult(
+        isValid: false,
+        errorMessage: 'Insufficient ${leaveType.displayName} balance. Available: $currentBalance days, Required: $daysToDeduct days',
+      );
+    }
+
+    // Policy Rule: Medical certificate required for SL > 2 days
+    if (leaveType == LeaveType.sick && totalDays > 2) {
+      // This will be handled in UI - just a note for frontend validation
+      print('💊 Note: Medical certificate required for Sick Leave > 2 days');
+    }
+
+    return LeaveValidationResult(isValid: true);
+  }
+
+  /// Calculate months worked since joining
+  int _calculateMonthsWorked(DateTime joiningDate, DateTime currentDate) {
+    return (currentDate.year - joiningDate.year) * 12 + 
+           currentDate.month - joiningDate.month;
+  }
+
+  /// Get leave balance information with policy calculations
+  LeaveBalanceInfo getLeaveBalanceInfo(AppUser user) {
+    if (user.joiningDate == null) {
+      throw Exception('Joining date not available');
+    }
+
+    return LeaveBalanceInfo.calculateBalance(
+      joiningDate: user.joiningDate!,
+      currentBalance: user.leaveBalance,
+      calculationDate: DateTime.now(),
+    );
+  }
+
+  /// Get all employee leave requests for admin/HR/manager
+  Future<AdminLeaveRequestsResult> getAllEmployeeLeaveRequests({
+    String? status,
+    String? employeeId,
+    String? leaveType,
+    String? startDate,
+    String? endDate,
+    int limit = 100,
+  }) async {
+    try {
+      print('🔍 LeaveService: Fetching all employee leave requests...');
+      
+      final callable = _functions.httpsCallable('getAllEmployeeLeaveRequests');
+      final result = await callable.call({
+        'status': status,
+        'employeeId': employeeId,
+        'leaveType': leaveType,
+        'startDate': startDate,
+        'endDate': endDate,
+        'limit': limit,
+      });
+      
+      print('📥 LeaveService: Received response: ${result.data}');
+      
+      if (result.data['success'] == true) {
+        final List<dynamic> requestsData = result.data['requests'] ?? [];
+        
+        final requests = requestsData
+            .map((data) {
+              try {
+                // Properly cast the data to Map<String, dynamic>
+                final Map<String, dynamic> requestData = Map<String, dynamic>.from(data as Map);
+                return AdminLeaveRequest.fromMap(requestData);
+              } catch (e) {
+                print('❌ Error parsing admin leave request: $e');
+                print('❌ Data type: ${data.runtimeType}');
+                print('❌ Data content: $data');
+                return null;
+              }
+            })
+            .where((request) => request != null)
+            .cast<AdminLeaveRequest>()
+            .toList();
+
+        return AdminLeaveRequestsResult(
+          success: true,
+          requests: requests,
+          totalFound: result.data['totalFound'] ?? 0,
+          returned: result.data['returned'] ?? 0,
+          hasMore: result.data['hasMore'] ?? false,
+        );
+      } else {
+        throw Exception(result.data['message'] ?? 'Failed to fetch leave requests');
+      }
+    } catch (e) {
+      print('❌ LeaveService: Error fetching all employee leave requests: $e');
+      return AdminLeaveRequestsResult(
+        success: false,
+        error: e.toString(),
+        requests: [],
+      );
+    }
+  }
+
+  /// Get leave statistics for admin dashboard
+  Future<Map<String, int>> getLeaveStatistics() async {
+    try {
+      final result = await getAllEmployeeLeaveRequests(limit: 1000);
+      
+      if (result.success) {
+        final Map<String, int> stats = {
+          'total': result.requests.length,
+          'pending': 0,
+          'approved': 0,
+          'rejected': 0,
+        };
+        
+        for (final request in result.requests) {
+          final status = request.status.toLowerCase();
+          if (stats.containsKey(status)) {
+            stats[status] = (stats[status] ?? 0) + 1;
+          }
+        }
+        
+        return stats;
+      }
+      
+      return {
+        'total': 0,
+        'pending': 0,
+        'approved': 0,
+        'rejected': 0,
+      };
+    } catch (e) {
+      print('Error getting leave statistics: $e');
+      return {
+        'total': 0,
+        'pending': 0,
+        'approved': 0,
+        'rejected': 0,
+      };
+    }
+  }
+
+
+          'name': (data['name'] ?? 'Unknown').toString(),
+          'department': (data['department'] ?? 'N/A').toString(),
+          'email': (data['email'] ?? '').toString(),
+          'empCode': (data['empCode'] ?? '').toString(),
+        };
+      }).toList();
+    } catch (e) {
+      print('Error getting all employees: $e');
+      return [];
+    }
+  }
+}
+
+/// Result model for leave application
+class LeaveApplicationResult {
+  final bool success;
+  final String? error;
+  final String? leaveRequestId;
+  final String? message;
+  final LeaveType? suggestedLeaveType;
+
+  LeaveApplicationResult({
+    required this.success,
+    this.error,
+    this.leaveRequestId,
+    this.message,
+    this.suggestedLeaveType,
+  });
+
+  factory LeaveApplicationResult.fromMap(Map<String, dynamic> map) {
+    return LeaveApplicationResult(
+      success: map['success'] ?? false,
+      error: map['error'],
+      leaveRequestId: map['leaveRequestId'],
+      message: map['message'],
+      suggestedLeaveType: map['suggestedLeaveType'] != null 
+          ? LeaveTypeExtension.fromString(map['suggestedLeaveType'])
+          : null,
+    );
+  }
+}
+
+/// Validation result for leave requests
+class LeaveValidationResult {
+  final bool isValid;
+  final String? errorMessage;
+  final LeaveType? suggestedLeaveType;
+
+  LeaveValidationResult({
+    required this.isValid,
+    this.errorMessage,
+    this.suggestedLeaveType,
+  });
+}
+
+/// Admin leave request model with additional employee information
+class AdminLeaveRequest {
+  final String id;
+  final String empCode;
+  final String employeeName;
+  final String employeeEmail;
+  final String department;
+  final String designation;
+  final String leaveType;
+  final String status;
+  final String reason;
+  final String startDate;
+  final String endDate;
+  final int totalDays;
+  final int daysToDeduct;
+  final String? submittedDate;
+  final String? approvedDate;
+  final String? approvedBy;
+  final String? rejectedDate;
+  final String? rejectedBy;
+  final String? rejectionReason;
+  final String? medicalCertificate;
+  final String? selectedOptionalHolidayId;
+  final String? createdAt;
+  final String? updatedAt;
+
+  AdminLeaveRequest({
+    required this.id,
+    required this.empCode,
+    required this.employeeName,
+    required this.employeeEmail,
+    required this.department,
+    required this.designation,
+    required this.leaveType,
+    required this.status,
+    required this.reason,
+    required this.startDate,
+    required this.endDate,
+    required this.totalDays,
+    required this.daysToDeduct,
+    this.submittedDate,
+    this.approvedDate,
+    this.approvedBy,
+    this.rejectedDate,
+    this.rejectedBy,
+    this.rejectionReason,
+    this.medicalCertificate,
+    this.selectedOptionalHolidayId,
+    this.createdAt,
+    this.updatedAt,
+  });
+
+  factory AdminLeaveRequest.fromMap(Map<String, dynamic> map) {
+    return AdminLeaveRequest(
+      id: map['id'] ?? '',
+      empCode: map['empCode'] ?? '',
+      employeeName: map['employeeName'] ?? '',
+      employeeEmail: map['employeeEmail'] ?? '',
+      department: map['department'] ?? '',
+      designation: map['designation'] ?? '',
+      leaveType: map['leaveType'] ?? '',
+      status: map['status'] ?? '',
+      reason: map['reason'] ?? '',
+      startDate: map['startDate'] ?? '',
+      endDate: map['endDate'] ?? '',
+      totalDays: map['totalDays'] ?? 0,
+      daysToDeduct: map['daysToDeduct'] ?? 0,
+      submittedDate: map['submittedDate'],
+      approvedDate: map['approvedDate'],
+      approvedBy: map['approvedBy'],
+      rejectedDate: map['rejectedDate'],
+      rejectedBy: map['rejectedBy'],
+      rejectionReason: map['rejectionReason'],
+      medicalCertificate: map['medicalCertificate'],
+      selectedOptionalHolidayId: map['selectedOptionalHolidayId'],
+      createdAt: map['createdAt'],
+      updatedAt: map['updatedAt'],
+    );
+  }
+
+  String get leaveTypeDisplayName {
+    switch (leaveType) {
+      case 'SL':
+        return 'Sick Leave';
+      case 'CL':
+        return 'Casual Leave';
+      case 'PL':
+        return 'Paid Leave';
+      case 'OH':
+        return 'Optional Holiday';
+      default:
+        return leaveType;
+    }
+  }
+}
+
+/// Result model for admin leave requests query
+class AdminLeaveRequestsResult {
+  final bool success;
+  final List<AdminLeaveRequest> requests;
+  final int totalFound;
+  final int returned;
+  final bool hasMore;
+  final String? error;
+
+  AdminLeaveRequestsResult({
+    required this.success,
+    required this.requests,
+    this.totalFound = 0,
+    this.returned = 0,
+    this.hasMore = false,
+    this.error,
+  });
+}

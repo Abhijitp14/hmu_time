@@ -1,0 +1,268 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    
+    // Helper functions for role checking
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+    
+    function getUserRole() {
+      return get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role;
+    }
+    
+    function isAdmin() {
+      return isAuthenticated() && getUserRole() == 'admin';
+    }
+    
+    function isHR() {
+      return isAuthenticated() && getUserRole() == 'hr';
+    }
+    
+    function isManager() {
+      return isAuthenticated() && getUserRole() == 'manager';
+    }
+    
+    function isEmployee() {
+      return isAuthenticated() && getUserRole() == 'employee';
+    }
+    
+    function isAdminOrHR() {
+      return isAdmin() || isHR();
+    }
+    
+    function isAdminOrHROrManager() {
+      return isAdmin() || isHR() || isManager();
+    }
+    
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+    
+    function isValidUserRole(role) {
+      return role in ['admin', 'hr', 'manager', 'employee'];
+    }
+    
+    // Users collection rules
+    match /users/{userId} {
+      // Allow users to read their own data
+      // Allow admin/HR to read all users
+      allow read: if isOwner(userId) || isAdminOrHR();
+      
+      // Only admin can create new users
+      allow create: if isAdmin() && 
+                   isValidUserRole(request.resource.data.role) &&
+                   request.resource.data.keys().hasAll(['email', 'name', 'role', 'isActive', 'createdAt']) &&
+                   request.resource.data.isActive is bool &&
+                   request.resource.data.createdAt is timestamp &&
+                   request.resource.data.email is string &&
+                   request.resource.data.name is string;
+      
+      // Admin can update any user, users can update their own profile (except role)
+      allow update: if (isAdmin()) || 
+                   (isOwner(userId) && 
+                    !('role' in request.resource.data.diff(resource.data).affectedKeys()) &&
+                    !('isActive' in request.resource.data.diff(resource.data).affectedKeys()));
+      
+      // Only admin can delete users
+      allow delete: if isAdmin();
+    }
+    
+    // Employee attendance records - legacy structure (keeping for backward compatibility)
+    match /attendance/{attendanceId} {
+      // Admin/HR/Manager can read all attendance records
+      // Employees can only read their own records
+      allow read: if isAdminOrHROrManager() || 
+                 (isEmployee() && resource.data.employeeId == request.auth.uid);
+      
+      // Only employees can create their own attendance records
+      // Admin/HR can create attendance records for any employee
+      allow create: if (isEmployee() && request.resource.data.employeeId == request.auth.uid) ||
+                   isAdminOrHR();
+      
+      // Employees can update their own records (for check-out)
+      // Admin/HR can update any attendance record
+      allow update: if (isEmployee() && resource.data.employeeId == request.auth.uid) ||
+                   isAdminOrHR();
+      
+      // Only admin/HR can delete attendance records
+      allow delete: if isAdminOrHR();
+      
+      // Nested attendance collections by employee and month
+      // Structure: /attendance/{empCode}/{empCode_monthName}/{date}
+      match /{monthCollection}/{dateId} {
+        // Admin/HR/Manager can access all attendance data
+        // Employees can only access their own data (empCode matches their uid or employee code)
+        allow read: if isAdminOrHROrManager() || 
+                   (isEmployee() && (attendanceId == request.auth.uid || 
+                   attendanceId == getUserEmployeeCode()));
+        
+        // Cloud Functions (server-side) and Admin/HR can create/update attendance records
+        // This allows our scheduled sync functions to work
+        allow create, update: if request.auth == null || // Server-side (Cloud Functions)
+                             isAdminOrHR();
+        
+        // Only admin/HR can delete nested attendance records
+        allow delete: if isAdminOrHR();
+      }
+    }
+    
+    // Helper function to get employee code from user profile
+    function getUserEmployeeCode() {
+      return get(/databases/$(database)/documents/users/$(request.auth.uid)).data.get('empCode', '');
+    }
+    
+    // Leave requests collection
+    match /leaveRequests/{requestId} {
+      // Admin/HR/Manager can read all leave requests
+      // Employees can only read their own requests
+      allow read: if isAdminOrHROrManager() || 
+                 (isEmployee() && resource.data.employeeId == request.auth.uid);
+      
+      // Employees can create their own leave requests
+      // Admin/HR can create requests for any employee
+      allow create: if (isEmployee() && request.resource.data.employeeId == request.auth.uid &&
+                       request.resource.data.status == 'pending') ||
+                   isAdminOrHR();
+      
+      // Employees can update their own pending requests
+      // Admin/HR/Manager can update any request (approve/reject)
+      allow update: if (isEmployee() && 
+                       resource.data.employeeId == request.auth.uid && 
+                       resource.data.status == 'pending') ||
+                   isAdminOrHROrManager();
+      
+      // Only admin/HR can delete leave requests
+      allow delete: if isAdminOrHR();
+    }
+    
+    // Holidays collection
+     match /holidays/{holidayType} {
+      // All authenticated users can read holiday type documents (government, optional, uncertain)
+      allow read: if isAuthenticated();
+      
+      // Only admin and HR can create/update/delete holiday type structure
+      allow write: if isAdminOrHR();
+      
+      // Holiday data subcollection for each type
+      match /data/{holidayId} {
+        // All authenticated users can read holiday data
+        allow read: if isAuthenticated();
+        
+        // Only admin, HR, and managers can create/update/delete individual holidays
+        allow write: if isAdminOrHROrManager();
+        
+        // Additional validation for holiday data structure
+        allow create: if isAdminOrHROrManager() && 
+                     request.resource.data.keys().hasAll(['name', 'date', 'type', 'createdAt']) &&
+                     request.resource.data.name is string &&
+                     request.resource.data.date is timestamp &&
+                     request.resource.data.type is string &&
+                     request.resource.data.type in ['government', 'optional', 'uncertain'] &&
+                     request.resource.data.createdAt is timestamp;
+        
+        allow update: if isAdminOrHROrManager() &&
+                     request.resource.data.keys().hasAll(['name', 'date', 'type', 'updatedAt']) &&
+                     request.resource.data.name is string &&
+                     request.resource.data.date is timestamp &&
+                     request.resource.data.type is string &&
+                     request.resource.data.type in ['government', 'optional', 'uncertain'] &&
+                     request.resource.data.updatedAt is timestamp;
+      }
+    }
+    
+    // Departments collection
+    match /departments/{departmentId} {
+      // All authenticated users can read departments
+      allow read: if isAuthenticated();
+      
+      // Only admin can manage departments
+      allow create, update, delete: if isAdmin();
+    }
+    
+    // Company settings/configuration
+    match /settings/{settingId} {
+      // Admin/HR/Manager can read settings
+      allow read: if isAdminOrHROrManager();
+      
+      // Only admin can modify settings
+      allow create, update, delete: if isAdmin();
+    }
+    
+    // Notifications collection
+    match /notifications/{notificationId} {
+      // Users can read their own notifications
+      // Admin/HR can read all notifications
+      allow read: if (resource.data.userId == request.auth.uid) || isAdminOrHR();
+      
+      // Admin/HR can create notifications
+      allow create: if isAdminOrHR();
+      
+      // Users can update their own notifications (mark as read)
+      // Admin/HR can update any notification
+      allow update: if (resource.data.userId == request.auth.uid) || isAdminOrHR();
+      
+      // Only admin can delete notifications
+      allow delete: if isAdmin();
+    }
+    
+    // Reports collection (read-only for most users)
+    match /reports/{reportId} {
+      // Admin/HR/Manager can read all reports
+      // Employees can read reports that include their data
+      allow read: if isAdminOrHROrManager() || 
+                 (isEmployee() && request.auth.uid in resource.data.get('employeeIds', []));
+      
+      // Only admin/HR can create reports
+      allow create: if isAdminOrHR();
+      
+      // Only admin can update or delete reports
+      allow update, delete: if isAdmin();
+    }
+    
+    // Audit logs (admin only)
+    match /auditLogs/{logId} {
+      allow read, create: if isAdmin();
+      // Audit logs should not be updated or deleted
+    }
+    
+    // Employee profiles (extended information)
+    match /employeeProfiles/{employeeId} {
+      // Users can read their own profile
+      // Admin/HR can read all profiles
+      allow read: if isOwner(employeeId) || isAdminOrHR();
+      
+      // Admin/HR can create employee profiles
+      allow create: if isAdminOrHR();
+      
+      // Users can update their own profile (limited fields)
+      // Admin/HR can update any profile
+      allow update: if isOwner(employeeId) || isAdminOrHR();
+      
+      // Only admin can delete employee profiles
+      allow delete: if isAdmin();
+    }
+    
+    // Payroll information (highly restricted)
+    match /payroll/{payrollId} {
+      // Only admin and HR can access payroll information
+      allow read, write: if isAdminOrHR();
+    }
+    
+    // Holidays collection
+    match /holidays/{holidayId} {
+      // Allow admin, HR, and managers to read all holidays
+      allow read: if isAdminOrHROrManager();
+      // Only admin and HR can create, update, and delete holidays
+      allow create, update, delete: if isAdminOrHR();
+      // Employees can only read holidays
+      allow read: if isEmployee();
+    }
+    
+    // Default deny rule for any other collections
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}
