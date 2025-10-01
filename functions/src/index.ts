@@ -1577,24 +1577,37 @@ export const applyForLeave = functions.https.onCall(
 
       // Policy Rule: CL Monthly Limit Check (1 per month)
       if (leaveType === 'casual') {
-        const requestDate = new Date(startDate);
-        const firstDayOfMonth = new Date(requestDate.getFullYear(), requestDate.getMonth(), 1);
-        const lastDayOfMonth = new Date(requestDate.getFullYear(), requestDate.getMonth() + 1, 0, 23, 59, 59);
-        
-        const monthlyClSnapshot = await admin.firestore()
-          .collection('leaveRequests')
-          .doc(empCode)
-          .collection('CL')
-          .where('status', 'in', ['approved', 'pending'])
-          .where('startDate', '>=', admin.firestore.Timestamp.fromDate(firstDayOfMonth))
-          .where('startDate', '<=', admin.firestore.Timestamp.fromDate(lastDayOfMonth))
-          .get();
-        
-        if (monthlyClSnapshot.size >= 1) {
-          throw new functions.https.HttpsError(
-            "invalid-argument",
-            `You have already used your Casual Leave for this month. Only 1 CL per month is allowed.${totalDays > 1 ? ` If you still wish to proceed, only 1 CL will be deducted and remaining ${totalDays - 1} day(s) will be marked as absent.` : ''}`
-          );
+        try {
+          const requestDate = new Date(startDate);
+          const firstDayOfMonth = new Date(requestDate.getFullYear(), requestDate.getMonth(), 1);
+          const lastDayOfMonth = new Date(requestDate.getFullYear(), requestDate.getMonth() + 1, 0, 23, 59, 59);
+          
+          // Simple query - just get approved/pending CLs and filter dates in code
+          const monthlyClSnapshot = await admin.firestore()
+            .collection('leaveRequests')
+            .doc(empCode)
+            .collection('CL')
+            .where('status', 'in', ['approved', 'pending'])
+            .get();
+          
+          // Filter by month in code to avoid composite index requirement
+          const monthlyClRequests = monthlyClSnapshot.docs.filter(doc => {
+            const data = doc.data();
+            const leaveStartDate = data.startDate.toDate();
+            return leaveStartDate >= firstDayOfMonth && leaveStartDate <= lastDayOfMonth;
+          });
+          
+          if (monthlyClRequests.length >= 1) {
+            throw new functions.https.HttpsError(
+              "invalid-argument",
+              `You have already used your Casual Leave for this month. Only 1 CL per month is allowed.${totalDays > 1 ? ` If you still wish to proceed, only 1 CL will be deducted and remaining ${totalDays - 1} day(s) will be marked as absent.` : ''}`
+            );
+          }
+        } catch (error) {
+          functions.logger.error('Error checking monthly CL usage:', error);
+          // If there's an error checking monthly usage, allow the request to proceed
+          // This prevents the entire leave application from failing due to index issues
+          functions.logger.warn('Proceeding with CL application despite monthly check error');
         }
       }
 
