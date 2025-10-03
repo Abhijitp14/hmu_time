@@ -145,6 +145,34 @@ class LeaveService {
     }
   }
 
+  /// Update leave status to completed (for leaves that have ended)
+  Future<bool> updateLeaveStatusToCompleted({
+    required String empCode,
+    required String leaveType,
+    required String requestId,
+  }) async {
+    try {
+      print('📝 LeaveService: Updating leave status to completed $requestId for employee $empCode');
+      
+      final callable = _functions.httpsCallable('updateLeaveStatus');
+      final result = await callable.call({
+        'empCode': empCode,
+        'leaveType': leaveType,
+        'requestId': requestId,
+      });
+      
+      if (result.data['success'] == true) {
+        print('✅ LeaveService: Leave status updated to completed successfully');
+        return true;
+      } else {
+        throw Exception(result.data['message'] ?? 'Failed to update leave status');
+      }
+    } catch (e) {
+      print('❌ LeaveService: Error updating leave status: $e');
+      throw Exception('Failed to update leave status: $e');
+    }
+  }
+
   /// Get all employees for filtering
   Future<List<Map<String, String>>> getAllEmployees() async {
     try {
@@ -212,14 +240,25 @@ class LeaveService {
           request.leaveType == LeaveType.sick &&
           (request.status == 'pending' || request.status == 'approved'));
           
+      // Check for monthly SL usage (one SL per month rule)
+      final currentMonth = DateTime.now().month;
+      final currentYear = DateTime.now().year;
+      bool hasMonthlySLUsed = leaveRequests.any((request) =>
+          request.leaveType == LeaveType.sick &&
+          request.startDate.month == currentMonth &&
+          request.startDate.year == currentYear);
+          
       bool hasPendingOrApprovedCL = leaveRequests.any((request) =>
           request.leaveType == LeaveType.casual &&
           (request.status == 'pending' || request.status == 'approved'));
       
-      print('🚫 LeaveService: SL blocked: $hasPendingOrApprovedSL, CL blocked: $hasPendingOrApprovedCL');
+      // SL is blocked if there's either an active request OR monthly limit reached
+      bool slBlocked = hasPendingOrApprovedSL || hasMonthlySLUsed;
+      
+      print('🚫 LeaveService: SL pending/approved: $hasPendingOrApprovedSL, monthly used: $hasMonthlySLUsed, total blocked: $slBlocked, CL blocked: $hasPendingOrApprovedCL');
       
       return {
-        LeaveType.sick: hasPendingOrApprovedSL,
+        LeaveType.sick: slBlocked,
         LeaveType.casual: hasPendingOrApprovedCL,
         LeaveType.paid: false, // PL is never blocked
         LeaveType.optionalHoliday: false, // OH is never blocked
@@ -335,7 +374,7 @@ class LeaveService {
     }
   }
 
-  /// Validate leave request against company policy
+  /// Main validation router - delegates to specific leave type validators
   Future<LeaveValidationResult> _validateLeaveRequest({
     required LeaveType leaveType,
     required DateTime startDate,
@@ -343,22 +382,100 @@ class LeaveService {
     required AppUser user,
     String? selectedOptionalHolidayId,
   }) async {
-    print('✅ LeaveService: Validating leave request...');
+    print('✅ LeaveService: Validating leave request for ${leaveType.displayName}...');
     
-    // Check for active leave restrictions (SL/CL blocked by pending/approved requests)
-    if (leaveType == LeaveType.sick || leaveType == LeaveType.casual) {
-      final restrictions = await checkActiveLeaveRestrictions();
-      if (restrictions[leaveType] == true) {
-        final leaveTypeName = leaveType == LeaveType.sick ? 'SL' : 'CL';
-        return LeaveValidationResult(
-          isValid: false,
-          errorMessage: 'You have an active $leaveTypeName request. Cancel or wait for approval/rejection to apply again.',
-        );
-      }
+    // Route to appropriate validator based on leave type
+    switch (leaveType) {
+      case LeaveType.sick:
+        return await _validateSickLeave(startDate, endDate, user);
+      case LeaveType.casual:
+        return await _validateCasualLeave(startDate, endDate, user);
+      case LeaveType.paid:
+        return await _validatePaidLeave(startDate, endDate, user);
+      case LeaveType.optionalHoliday:
+        return await _validateOptionalHoliday(startDate, endDate, user, selectedOptionalHolidayId);
+    }
+  }
+
+  /// Validate Sick Leave (SL) application
+  Future<LeaveValidationResult> _validateSickLeave(DateTime startDate, DateTime endDate, AppUser user) async {
+    print('🏥 LeaveService: Validating Sick Leave...');
+    
+    // Check for active SL restrictions
+    final restrictions = await checkActiveLeaveRestrictions();
+    if (restrictions[LeaveType.sick] == true) {
+      return LeaveValidationResult(
+        isValid: false,
+        errorMessage: 'You have an active SL request. Cancel or wait for approval/rejection to apply again.',
+      );
     }
     
-    // Basic date validation - Skip for Sick Leave since it can occur anytime
-    if (leaveType != LeaveType.sick && !LeaveRequest.isValidDateRange(startDate, endDate)) {
+    // Basic date validation
+    if (startDate.isAfter(endDate)) {
+      return LeaveValidationResult(
+        isValid: false,
+        errorMessage: 'Start date cannot be after end date',
+      );
+    }
+
+    // Calculate leave days
+    final totalDays = LeaveRequest.calculateLeaveDays(startDate, endDate);
+    if (totalDays == 0) {
+      return LeaveValidationResult(
+        isValid: false,
+        errorMessage: 'Leave request must be for at least one working day',
+      );
+    }
+
+    // Check balance (SL always deducts 1 regardless of duration)
+    final currentBalance = user.leaveBalance[LeaveType.sick.balanceKey] ?? 0;
+    if (currentBalance < 1) {
+      return LeaveValidationResult(
+        isValid: false,
+        errorMessage: 'Insufficient Sick Leave balance. Available: $currentBalance, Required: 1',
+      );
+    }
+
+    // Medical certificate reminder for SL > 2 days
+    if (totalDays > 2) {
+      print('💊 Note: Medical certificate required for Sick Leave > 2 days');
+    }
+
+    return LeaveValidationResult(isValid: true);
+  }
+
+  /// Validate Casual Leave (CL) application
+  Future<LeaveValidationResult> _validateCasualLeave(DateTime startDate, DateTime endDate, AppUser user) async {
+    print('🚶 LeaveService: Validating Casual Leave...');
+    
+    // Check for active CL restrictions
+    final restrictions = await checkActiveLeaveRestrictions();
+    if (restrictions[LeaveType.casual] == true) {
+      return LeaveValidationResult(
+        isValid: false,
+        errorMessage: 'You have an active CL request. Cancel or wait for approval/rejection to apply again.',
+      );
+    }
+    
+    // Check service period eligibility (6 months required)
+    final joiningDate = user.joiningDate;
+    if (joiningDate == null) {
+      return LeaveValidationResult(
+        isValid: false,
+        errorMessage: 'Joining date not found. Please contact HR.',
+      );
+    }
+
+    final monthsWorked = _calculateMonthsWorked(joiningDate, DateTime.now());
+    if (monthsWorked < 6) {
+      return LeaveValidationResult(
+        isValid: false,
+        errorMessage: 'Casual Leave can only be used after 6 months of service',
+      );
+    }
+    
+    // Basic date validation
+    if (!LeaveRequest.isValidDateRange(startDate, endDate)) {
       return LeaveValidationResult(
         isValid: false,
         errorMessage: 'Cannot apply for leave in the past',
@@ -381,7 +498,22 @@ class LeaveService {
       );
     }
 
-    // Check if employee has sufficient tenure for leave type
+    // CL policy: Monthly limit validation will be handled by Firebase Functions
+    if (totalDays > 1) {
+      return LeaveValidationResult(
+        isValid: true,
+        warningMessage: 'Only 1 Casual Leave per month is allowed. 1 CL will be deducted, remaining ${totalDays - 1} day(s) will be marked as absent if you don\'t punch in at office.',
+      );
+    }
+
+    return LeaveValidationResult(isValid: true);
+  }
+
+  /// Validate Paid Leave (PL) application  
+  Future<LeaveValidationResult> _validatePaidLeave(DateTime startDate, DateTime endDate, AppUser user) async {
+    print('💼 LeaveService: Validating Paid Leave...');
+    
+    // Check service period eligibility (6 months required)
     final joiningDate = user.joiningDate;
     if (joiningDate == null) {
       return LeaveValidationResult(
@@ -391,26 +523,39 @@ class LeaveService {
     }
 
     final monthsWorked = _calculateMonthsWorked(joiningDate, DateTime.now());
-    
-    // Policy Rule: CL and PL usable after 6 months, SL and Optional Holidays from day one
-    if ((leaveType == LeaveType.casual || leaveType == LeaveType.paid) && 
-        monthsWorked < 6) {
+    if (monthsWorked < 6) {
       return LeaveValidationResult(
         isValid: false,
-        errorMessage: '${leaveType.displayName} can only be used after 6 months of service',
+        errorMessage: 'Paid Leave can only be used after 6 months of service',
       );
     }
-
-    // Policy Rule: CL validation will be handled by Firebase Functions
-    if (leaveType == LeaveType.casual && totalDays > 1) {
+    
+    // Basic date validation
+    if (!LeaveRequest.isValidDateRange(startDate, endDate)) {
       return LeaveValidationResult(
-        isValid: true,
-        warningMessage: 'Only 1 Casual Leave per month is allowed. 1 CL will be deducted, remaining ${totalDays - 1} day(s) will be marked as absent if you don\'t punch in at office.',
+        isValid: false,
+        errorMessage: 'Cannot apply for leave in the past',
       );
     }
 
-    // Policy Rule: PL minimum 2 days at a time
-    if (leaveType == LeaveType.paid && totalDays == 1) {
+    if (startDate.isAfter(endDate)) {
+      return LeaveValidationResult(
+        isValid: false,
+        errorMessage: 'Start date cannot be after end date',
+      );
+    }
+
+    // Calculate leave days
+    final totalDays = LeaveRequest.calculateLeaveDays(startDate, endDate);
+    if (totalDays == 0) {
+      return LeaveValidationResult(
+        isValid: false,
+        errorMessage: 'Leave request must be for at least one working day',
+      );
+    }
+
+    // PL minimum 2 days policy
+    if (totalDays == 1) {
       // Convert 1-day PL to CL if balance available
       final casualBalance = user.casualLeave;
       
@@ -428,81 +573,80 @@ class LeaveService {
       }
     }
 
-    // Policy Rule: PL Balance Check - Check if applying for more days than available
-    if (leaveType == LeaveType.paid) {
-      final currentBalance = user.leaveBalance[leaveType.balanceKey] ?? 0;
-      
-      // Check if user is applying for more days than available balance
-      if (totalDays > currentBalance) {
-        return LeaveValidationResult(
-          isValid: true,
-          warningMessage: 'Requesting $totalDays days but only $currentBalance days available in balance. Extra ${totalDays - currentBalance} day(s) will be marked as absent if you don\'t punch in at office.',
-        );
-      }
-    }
-
-    // Policy Rule: Optional Holiday - must be for predefined holidays only and single day
-    if (leaveType == LeaveType.optionalHoliday) {
-      if (totalDays != 1) {
-        return LeaveValidationResult(
-          isValid: false,
-          errorMessage: 'Optional Holiday can only be applied for single days',
-        );
-      }
-      
-      if (selectedOptionalHolidayId == null) {
-        return LeaveValidationResult(
-          isValid: false,
-          errorMessage: 'Please select a specific optional holiday from the available list',
-        );
-      }
-      
-      // Additional validation would check if the selected holiday date matches the request date
-      // This will be implemented in the Firebase function
-    }
-
-    // Check leave balance - For Sick Leave, check against deduction amount (always 1), not total days
-    final currentBalance = user.leaveBalance[leaveType.balanceKey] ?? 0;
-    final daysToDeduct = LeaveRequest.calculateLeaveDeduction(startDate, endDate, leaveType);
-    
-    // For CL, always deduct only 1 regardless of request days (similar to SL policy)
-    final actualDeduction = leaveType == LeaveType.casual ? 1 : daysToDeduct;
-    
-    if (currentBalance < actualDeduction) {
-      // Allow applications with warnings for leaves that can be marked absent
-      if (leaveType == LeaveType.casual && totalDays > 1) {
-        return LeaveValidationResult(
-          isValid: true,
-          warningMessage: 'Only $actualDeduction CL will be deducted, remaining ${totalDays - actualDeduction} day(s) will be marked as absent if you don\'t punch in at office.',
-        );
-      } else if (leaveType == LeaveType.paid && totalDays > currentBalance) {
-        // For PL: Allow application but warn about excess days being marked absent
-        return LeaveValidationResult(
-          isValid: true,
-          warningMessage: 'Only $currentBalance PL day(s) will be deducted, remaining ${totalDays - currentBalance} day(s) will be marked as absent if you don\'t punch in at office.',
-        );
-      } else {
-        return LeaveValidationResult(
-          isValid: false,
-          errorMessage: 'Insufficient ${leaveType.displayName} balance. Available: $currentBalance days, Required: $actualDeduction days',
-        );
-      }
-    }
-
-    // Policy Rule: Medical certificate required for SL > 2 days
-    if (leaveType == LeaveType.sick && totalDays > 2) {
-      // This will be handled in UI - just a note for frontend validation
-      print('💊 Note: Medical certificate required for Sick Leave > 2 days');
+    // Check if applying for more days than available balance
+    final currentBalance = user.leaveBalance[LeaveType.paid.balanceKey] ?? 0;
+    if (totalDays > currentBalance) {
+      return LeaveValidationResult(
+        isValid: true,
+        warningMessage: 'Requesting $totalDays days but only $currentBalance days available in balance. Extra ${totalDays - currentBalance} day(s) will be marked as absent if you don\'t punch in at office.',
+      );
     }
 
     return LeaveValidationResult(isValid: true);
   }
 
-  /// Calculate months worked since joining
+  /// Validate Optional Holiday (OH) application
+  Future<LeaveValidationResult> _validateOptionalHoliday(DateTime startDate, DateTime endDate, AppUser user, String? selectedOptionalHolidayId) async {
+    print('🎉 LeaveService: Validating Optional Holiday...');
+    
+    // Basic date validation
+    if (!LeaveRequest.isValidDateRange(startDate, endDate)) {
+      return LeaveValidationResult(
+        isValid: false,
+        errorMessage: 'Cannot apply for leave in the past',
+      );
+    }
+
+    if (startDate.isAfter(endDate)) {
+      return LeaveValidationResult(
+        isValid: false,
+        errorMessage: 'Start date cannot be after end date',
+      );
+    }
+
+    // Calculate leave days
+    final totalDays = LeaveRequest.calculateLeaveDays(startDate, endDate);
+    
+    // Optional Holiday must be single day
+    if (totalDays != 1) {
+      return LeaveValidationResult(
+        isValid: false,
+        errorMessage: 'Optional Holiday can only be applied for single days',
+      );
+    }
+    
+    // Must select a specific holiday
+    if (selectedOptionalHolidayId == null) {
+      return LeaveValidationResult(
+        isValid: false,
+        errorMessage: 'Please select a specific optional holiday from the available list',
+      );
+    }
+
+    // Check balance
+    final currentBalance = user.leaveBalance[LeaveType.optionalHoliday.balanceKey] ?? 0;
+    if (currentBalance < 1) {
+      return LeaveValidationResult(
+        isValid: false,
+        errorMessage: 'Insufficient Optional Holiday balance. Available: $currentBalance, Required: 1',
+      );
+    }
+
+    // Additional validation would check if the selected holiday date matches the request date
+    // This will be implemented in the Firebase function
+    
+    return LeaveValidationResult(isValid: true);
+  }
+
+  /// Common helper method for service period calculation
   int _calculateMonthsWorked(DateTime joiningDate, DateTime currentDate) {
     return (currentDate.year - joiningDate.year) * 12 + 
            currentDate.month - joiningDate.month;
   }
+
+
+
+
 
   /// Get monthly leave usage for policy validation
 

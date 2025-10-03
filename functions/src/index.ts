@@ -1481,255 +1481,511 @@ export const getOptionalHolidays = functions.https.onCall(
   }
 );
 
+// =============================================================================
+// LEAVE TYPE HANDLERS - Separate logic for each leave type
+// =============================================================================
+
 /**
- * Apply for leave
+ * Common leave validation and user data retrieval
+ */
+async function getLeaveApplicationContext(data: any, context: any) {
+  // Check if user is authenticated
+  if (!context.auth) {
+    throw new functions.https.HttpsError(
+      "unauthenticated", 
+      "User must be authenticated to apply for leave."
+    );
+  }
+
+  const { leaveType, startDate, endDate, totalDays, daysToDeduct } = data;
+
+  // Validate required fields
+  if (!leaveType || !startDate || !endDate) {
+    throw new functions.https.HttpsError(
+      "invalid-argument",
+      "Missing required fields: leaveType, startDate, endDate"
+    );
+  }
+
+  // Get user details
+  const userDoc = await admin.firestore()
+    .collection('users')
+    .doc(context.auth.uid)
+    .get();
+
+  if (!userDoc.exists) {
+    throw new functions.https.HttpsError(
+      "not-found",
+      "User not found"
+    );
+  }
+
+  const userData = userDoc.data();
+  const empCode = userData?.empCode || context.auth.uid;
+  const joiningDate = userData?.joiningDate ? userData.joiningDate.toDate() : null;
+
+  return {
+    userData,
+    empCode,
+    joiningDate,
+    leaveType,
+    startDate: new Date(startDate),
+    endDate: new Date(endDate),
+    totalDays,
+    daysToDeduct
+  };
+}
+
+/**
+ * Calculate working days for deduction based on leave type policy
+ */
+function calculateWorkingDaysDeduction(startDate: Date, endDate: Date, deductionAmount: number): admin.firestore.Timestamp[] {
+  const deductionDates: admin.firestore.Timestamp[] = [];
+  const currentDate = new Date(startDate);
+  
+  // For PL and other full-duration leaves, calculate working days from start date
+  while (deductionDates.length < deductionAmount && currentDate <= endDate) {
+    // Skip Sundays (weekday 0 = Sunday)
+    if (currentDate.getDay() !== 0) {
+      deductionDates.push(admin.firestore.Timestamp.fromDate(new Date(currentDate)));
+    }
+    currentDate.setDate(currentDate.getDate() + 1);
+  }
+  
+  return deductionDates;
+}
+
+/**
+ * Handle Sick Leave (SL) Application
+ */
+async function handleSickLeaveApplication(data: any, context: any) {
+  const leaveContext = await getLeaveApplicationContext(data, context);
+  const { userData, empCode, startDate, endDate, totalDays, daysToDeduct } = leaveContext;
+  const { reason, medicalCertificate } = data;
+
+  // SL requires reason
+  if (!reason) {
+    throw new functions.https.HttpsError(
+      "invalid-argument",
+      "Reason is required for Sick Leave"
+    );
+  }
+
+  // Policy Rule 1: Check for active SL applications (one at a time)
+  try {
+    const activeSLSnapshot = await admin.firestore()
+      .collection('leaveRequests')
+      .doc(empCode)
+      .collection('SL')
+      .where('status', 'in', ['pending', 'approved'])
+      .get();
+
+    if (!activeSLSnapshot.empty) {
+      throw new functions.https.HttpsError(
+        "invalid-argument",
+        "You have an active SL request. Cancel or wait for approval/rejection to apply again."
+      );
+    }
+  } catch (error) {
+    functions.logger.error('Error checking active SL requests:', error);
+    // Continue if check fails
+  }
+
+  // Policy Rule 2: Check monthly limit (one SL per month)
+  try {
+    const currentMonth = startDate.getMonth();
+    const currentYear = startDate.getFullYear();
+    
+    // Get all SL requests for the current month (any status)
+    const monthlySLSnapshot = await admin.firestore()
+      .collection('leaveRequests')
+      .doc(empCode)
+      .collection('SL')
+      .get();
+
+    // Check if any SL was applied in the current month
+    let monthlySlUsed = false;
+    for (const doc of monthlySLSnapshot.docs) {
+      const slData = doc.data();
+      if (slData.appliedDate) {
+        const appliedDate = slData.appliedDate.toDate();
+        if (appliedDate.getMonth() === currentMonth && 
+            appliedDate.getFullYear() === currentYear) {
+          monthlySlUsed = true;
+          break;
+        }
+      }
+    }
+
+    if (monthlySlUsed) {
+      throw new functions.https.HttpsError(
+        "invalid-argument",
+        "You have already used your monthly SL quota. Only one SL application allowed per month."
+      );
+    }
+  } catch (error) {
+    if (error instanceof functions.https.HttpsError) {
+      throw error; // Re-throw our custom error
+    }
+    functions.logger.error('Error checking monthly SL limit:', error);
+    // Continue if check fails
+  }
+
+  // Calculate actual deduction (always 1 for SL regardless of duration)
+  const finalDeductionAmount = 1;
+
+  // Calculate deduction dates for SL (only first date since only 1 day is deducted)
+  const deductionDates = [admin.firestore.Timestamp.fromDate(startDate)];
+
+  // Validate balance
+  const currentBalance = userData?.leaveBalance || {};
+  const availableBalance = currentBalance['sickLeave'] || 0;
+  
+  if (availableBalance < finalDeductionAmount) {
+    throw new functions.https.HttpsError(
+      "invalid-argument",
+      `Insufficient Sick Leave balance. Available: ${availableBalance}, Required: ${finalDeductionAmount}`
+    );
+  }
+
+  functions.logger.info(`SL Deduction: ${finalDeductionAmount} day(s) on dates:`, deductionDates.map(d => d.toDate()));
+
+  // SL is auto-approved
+  return {
+    status: 'approved',
+    finalDeductionAmount,
+    deductionDates,
+    balanceKey: 'sickLeave',
+    approvalInfo: {
+      approvedAt: admin.firestore.FieldValue.serverTimestamp(),
+      approvedBy: 'system',
+      approvalNote: 'Sick leave auto-approved as per company policy'
+    }
+  };
+}
+
+/**
+ * Handle Casual Leave (CL) Application
+ */
+async function handleCasualLeaveApplication(data: any, context: any) {
+  const leaveContext = await getLeaveApplicationContext(data, context);
+  const { userData, empCode, joiningDate, startDate, endDate, totalDays } = leaveContext;
+  const { reason } = data;
+
+  // CL requires reason
+  if (!reason) {
+    throw new functions.https.HttpsError(
+      "invalid-argument",
+      "Reason is required for Casual Leave"
+    );
+  }
+
+  // Policy Rule: Check service period eligibility for CL (6 months required)
+  if (joiningDate) {
+    const now = new Date();
+    const monthsWorked = (now.getFullYear() - joiningDate.getFullYear()) * 12 + 
+                       (now.getMonth() - joiningDate.getMonth());
+    
+    if (monthsWorked < 6) {
+      throw new functions.https.HttpsError(
+        "invalid-argument",
+        "Casual Leave can only be used after 6 months of service"
+      );
+    }
+  }
+
+  // Policy Rule: Check for active CL applications (one at a time)
+  try {
+    const activeCLSnapshot = await admin.firestore()
+      .collection('leaveRequests')
+      .doc(empCode)
+      .collection('CL')
+      .where('status', 'in', ['pending', 'approved'])
+      .get();
+
+    if (!activeCLSnapshot.empty) {
+      throw new functions.https.HttpsError(
+        "invalid-argument",
+        "You have an active CL request. Cancel or wait for approval/rejection to apply again."
+      );
+    }
+  } catch (error) {
+    functions.logger.error('Error checking active CL requests:', error);
+    // Continue if check fails
+  }
+
+  // Policy Rule: CL Monthly Limit Check (1 per month)
+  try {
+    const requestDate = startDate;
+    const firstDayOfMonth = new Date(requestDate.getFullYear(), requestDate.getMonth(), 1);
+    const lastDayOfMonth = new Date(requestDate.getFullYear(), requestDate.getMonth() + 1, 0, 23, 59, 59);
+    
+    // Simple query - just get approved/pending CLs and filter dates in code
+    const monthlyClSnapshot = await admin.firestore()
+      .collection('leaveRequests')
+      .doc(empCode)
+      .collection('CL')
+      .where('status', 'in', ['approved', 'pending'])
+      .get();
+    
+    // Filter by month in code to avoid composite index requirement
+    const monthlyClRequests = monthlyClSnapshot.docs.filter(doc => {
+      const data = doc.data();
+      const leaveStartDate = data.startDate.toDate();
+      return leaveStartDate >= firstDayOfMonth && leaveStartDate <= lastDayOfMonth;
+    });
+    
+    if (monthlyClRequests.length >= 1) {
+      throw new functions.https.HttpsError(
+        "invalid-argument",
+        `You have already used your Casual Leave for this month. Only 1 CL per month is allowed.${totalDays > 1 ? ` If you still wish to proceed, only 1 CL will be deducted and remaining ${totalDays - 1} day(s) will be marked as absent.` : ''}`
+      );
+    }
+  } catch (error) {
+    functions.logger.error('Error checking monthly CL usage:', error);
+    // Continue if monthly check fails
+  }
+
+  // Calculate actual deduction (always 1 for CL regardless of duration)
+  const finalDeductionAmount = 1;
+
+  // Calculate deduction dates for CL (only first date since only 1 day is deducted)
+  const deductionDates = [admin.firestore.Timestamp.fromDate(startDate)];
+
+  // Validate balance
+  const currentBalance = userData?.leaveBalance || {};
+  const availableBalance = currentBalance['casualLeave'] || 0;
+  
+  if (availableBalance < finalDeductionAmount) {
+    // Allow excess days for CL (rest marked absent)
+    if (totalDays > 1) {
+      functions.logger.info(`CL approved with warning: 1 day from balance, ${totalDays - 1} days will be marked absent`);
+    } else {
+      throw new functions.https.HttpsError(
+        "invalid-argument",
+        `Insufficient Casual Leave balance. Available: ${availableBalance}, Required: ${finalDeductionAmount}`
+      );
+    }
+  }
+
+  functions.logger.info(`CL Deduction: ${finalDeductionAmount} day(s) on dates:`, deductionDates.map(d => d.toDate()));
+
+  // CL requires approval
+  return {
+    status: 'pending',
+    finalDeductionAmount,
+    deductionDates,
+    balanceKey: 'casualLeave',
+    approvalInfo: {}
+  };
+}
+
+/**
+ * Handle Paid Leave (PL) Application
+ */
+async function handlePaidLeaveApplication(data: any, context: any) {
+  const leaveContext = await getLeaveApplicationContext(data, context);
+  const { userData, empCode, joiningDate, startDate, endDate, totalDays } = leaveContext;
+  const { reason } = data;
+
+  // PL requires reason
+  if (!reason) {
+    throw new functions.https.HttpsError(
+      "invalid-argument",
+      "Reason is required for Paid Leave"
+    );
+  }
+
+  // Policy Rule: Check service period eligibility for PL (6 months required)
+  if (joiningDate) {
+    const now = new Date();
+    const monthsWorked = (now.getFullYear() - joiningDate.getFullYear()) * 12 + 
+                       (now.getMonth() - joiningDate.getMonth());
+    
+    if (monthsWorked < 6) {
+      throw new functions.https.HttpsError(
+        "invalid-argument",
+        "Paid Leave can only be used after 6 months of service"
+      );
+    }
+  }
+
+  // Policy Rule: PL Minimum Days Check (minimum 2 days)
+  if (totalDays < 2) {
+    throw new functions.https.HttpsError(
+      "invalid-argument",
+      "Paid Leave requires minimum 2 days per application. Please apply for at least 2 days or use Casual Leave for single day requests."
+    );
+  }
+
+  // Validate balance and handle excess days
+  const currentBalance = userData?.leaveBalance || {};
+  const availableBalance = currentBalance['paidLeave'] || 0;
+  let finalDeductionAmount = totalDays;
+  
+  if (totalDays > availableBalance && availableBalance > 0) {
+    // Allow excess days (available balance deducted, rest marked absent)
+    const absentDays = totalDays - availableBalance;
+    functions.logger.info(`PL approved with warning: ${availableBalance} days from balance, ${absentDays} days will be marked absent`);
+    finalDeductionAmount = availableBalance;
+  } else if (availableBalance < totalDays) {
+    throw new functions.https.HttpsError(
+      "invalid-argument",
+      `Insufficient Paid Leave balance. Available: ${availableBalance}, Required: ${totalDays}`
+    );
+  }
+
+  // Calculate deduction dates for PL (all working days between start and end date)
+  const deductionDates = calculateWorkingDaysDeduction(startDate, endDate, finalDeductionAmount);
+
+  functions.logger.info(`PL Deduction: ${finalDeductionAmount} day(s) on dates:`, deductionDates.map(d => d.toDate()));
+
+  // PL requires approval
+  return {
+    status: 'pending',
+    finalDeductionAmount,
+    deductionDates,
+    balanceKey: 'paidLeave',
+    approvalInfo: {}
+  };
+}
+
+/**
+ * Handle Optional Holiday (OH) Application
+ */
+async function handleOptionalHolidayApplication(data: any, context: any) {
+  const leaveContext = await getLeaveApplicationContext(data, context);
+  const { userData, empCode, startDate, endDate, totalDays } = leaveContext;
+  const { selectedOptionalHolidayId } = data;
+
+  // OH must be single day
+  if (totalDays !== 1) {
+    throw new functions.https.HttpsError(
+      "invalid-argument",
+      "Optional Holiday can only be applied for single days"
+    );
+  }
+
+  // Must select a specific holiday
+  if (!selectedOptionalHolidayId) {
+    throw new functions.https.HttpsError(
+      "invalid-argument",
+      "Please select a specific optional holiday from the available list"
+    );
+  }
+
+  // Validate the selected holiday
+  const holidayDoc = await admin.firestore()
+    .collection('optionalHolidays')
+    .doc(selectedOptionalHolidayId)
+    .get();
+
+  if (!holidayDoc.exists) {
+    throw new functions.https.HttpsError(
+      "invalid-argument",
+      "Selected optional holiday not found"
+    );
+  }
+
+  const selectedHoliday = holidayDoc.data();
+  
+  // Validate that the start date matches the holiday date
+  const holidayDate = selectedHoliday?.date;
+  const requestStartDate = startDate;
+  const holidayDateObj = holidayDate?.toDate ? holidayDate.toDate() : new Date(holidayDate);
+  
+  // Compare dates without time components
+  const requestDateOnly = new Date(requestStartDate.getFullYear(), requestStartDate.getMonth(), requestStartDate.getDate());
+  const holidayDateOnly = new Date(holidayDateObj.getFullYear(), holidayDateObj.getMonth(), holidayDateObj.getDate());
+  
+  if (requestDateOnly.getTime() !== holidayDateOnly.getTime()) {
+    functions.logger.info(`Date mismatch: Request=${requestDateOnly.toISOString()}, Holiday=${holidayDateOnly.toISOString()}`);
+    throw new functions.https.HttpsError(
+      "invalid-argument",
+      "Leave date must match the selected optional holiday date"
+    );
+  }
+
+  // Validate balance
+  const currentBalance = userData?.leaveBalance || {};
+  const availableBalance = currentBalance['optionalHoliday'] || 0;
+  const finalDeductionAmount = 1;
+  
+  if (availableBalance < finalDeductionAmount) {
+    throw new functions.https.HttpsError(
+      "invalid-argument",
+      `Insufficient Optional Holiday balance. Available: ${availableBalance}, Required: ${finalDeductionAmount}`
+    );
+  }
+
+  // Calculate deduction dates for OH (single day)
+  const deductionDates = [admin.firestore.Timestamp.fromDate(startDate)];
+
+  functions.logger.info(`OH Deduction: ${finalDeductionAmount} day(s) on dates:`, deductionDates.map(d => d.toDate()));
+
+  // OH is auto-approved
+  return {
+    status: 'approved',
+    finalDeductionAmount,
+    deductionDates,
+    balanceKey: 'optionalHoliday',
+    approvalInfo: {
+      approvedAt: admin.firestore.FieldValue.serverTimestamp(),
+      approvedBy: 'system',
+      approvalNote: 'Optional holiday auto-approved as per company policy'
+    }
+  };
+}
+
+/**
+ * Main Apply for Leave Function - Routes to appropriate handler
  */
 export const applyForLeave = functions.https.onCall(
   async (data, context) => {
     try {
-      // Check if user is authenticated
-      if (!context.auth) {
-        throw new functions.https.HttpsError(
-          "unauthenticated", 
-          "User must be authenticated to apply for leave."
-        );
-      }
+      const { leaveType } = data;
 
-      const {
-        leaveType,
-        startDate,
-        endDate,
-        totalDays,
-        daysToDeduct, // Days to actually deduct from balance (for SL this is 1 regardless of duration)
-        reason,
-        medicalCertificate,
-        selectedOptionalHolidayId
-      } = data;
+      functions.logger.info(`Leave application from user: ${context.auth?.uid}, type: ${leaveType}`);
 
-      // Validate required fields
-      if (!leaveType || !startDate || !endDate) {
-        throw new functions.https.HttpsError(
-          "invalid-argument",
-          "Missing required fields: leaveType, startDate, endDate"
-        );
-      }
-
-      // For non-optional holidays, reason is required
-      if (leaveType !== 'optionalHoliday' && !reason) {
-        throw new functions.https.HttpsError(
-          "invalid-argument",
-          "Reason is required for this leave type"
-        );
-      }
-
-      functions.logger.info(`Leave application from user: ${context.auth.uid}, type: ${leaveType}`);
-
-      // Get user details
-      const userDoc = await admin.firestore()
-        .collection('users')
-        .doc(context.auth.uid)
-        .get();
-
-      if (!userDoc.exists) {
-        throw new functions.https.HttpsError(
-          "not-found",
-          "User not found"
-        );
-      }
-
-      const userData = userDoc.data();
-      const currentBalance = userData?.leaveBalance || {};
-      const empCode = userData?.empCode || context.auth.uid;
-      const joiningDate = userData?.joiningDate ? userData.joiningDate.toDate() : null;
-
-      // Policy Rule: Check service period eligibility for CL and PL (6 months required)
-      if ((leaveType === 'casual' || leaveType === 'paid') && joiningDate) {
-        const now = new Date();
-        const monthsWorked = (now.getFullYear() - joiningDate.getFullYear()) * 12 + 
-                           (now.getMonth() - joiningDate.getMonth());
-        
-        if (monthsWorked < 6) {
+      // Route to appropriate leave type handler
+      let leaveResult;
+      switch (leaveType) {
+        case 'sick':
+          leaveResult = await handleSickLeaveApplication(data, context);
+          break;
+        case 'casual':
+          leaveResult = await handleCasualLeaveApplication(data, context);
+          break;
+        case 'paid':
+          leaveResult = await handlePaidLeaveApplication(data, context);
+          break;
+        case 'optionalHoliday':
+          leaveResult = await handleOptionalHolidayApplication(data, context);
+          break;
+        default:
           throw new functions.https.HttpsError(
             "invalid-argument",
-            `${leaveType === 'casual' ? 'Casual' : 'Paid'} Leave can only be used after 6 months of service`
+            `Unsupported leave type: ${leaveType}`
           );
-        }
       }
 
-      // Policy Rule: Check for active SL/CL applications (one at a time)
-      if (leaveType === 'sick' || leaveType === 'casual') {
-        const leaveTypeCollection = leaveType === 'sick' ? 'SL' : 'CL';
-        const activeRequestsSnapshot = await admin.firestore()
-          .collection('leaveRequests')
-          .doc(empCode)
-          .collection(leaveTypeCollection)
-          .where('status', 'in', ['pending', 'approved'])
-          .get();
+      // Get context from the handlers
+      const leaveContext = await getLeaveApplicationContext(data, context);
+      const { userData, empCode, startDate, endDate, totalDays } = leaveContext;
+      const { reason, medicalCertificate, selectedOptionalHolidayId } = data;
+      const { status, finalDeductionAmount, deductionDates, balanceKey, approvalInfo } = leaveResult;
 
-        if (!activeRequestsSnapshot.empty) {
-          const leaveTypeName = leaveType === 'sick' ? 'SL' : 'CL';
-          throw new functions.https.HttpsError(
-            "invalid-argument",
-            `You have an active ${leaveTypeName} request. Cancel or wait for approval/rejection to apply again.`
-          );
-        }
-      }
-
-      // Policy Rule: CL Monthly Limit Check (1 per month)
-      if (leaveType === 'casual') {
-        try {
-          const requestDate = new Date(startDate);
-          const firstDayOfMonth = new Date(requestDate.getFullYear(), requestDate.getMonth(), 1);
-          const lastDayOfMonth = new Date(requestDate.getFullYear(), requestDate.getMonth() + 1, 0, 23, 59, 59);
-          
-          // Simple query - just get approved/pending CLs and filter dates in code
-          const monthlyClSnapshot = await admin.firestore()
-            .collection('leaveRequests')
-            .doc(empCode)
-            .collection('CL')
-            .where('status', 'in', ['approved', 'pending'])
-            .get();
-          
-          // Filter by month in code to avoid composite index requirement
-          const monthlyClRequests = monthlyClSnapshot.docs.filter(doc => {
-            const data = doc.data();
-            const leaveStartDate = data.startDate.toDate();
-            return leaveStartDate >= firstDayOfMonth && leaveStartDate <= lastDayOfMonth;
-          });
-          
-          if (monthlyClRequests.length >= 1) {
-            throw new functions.https.HttpsError(
-              "invalid-argument",
-              `You have already used your Casual Leave for this month. Only 1 CL per month is allowed.${totalDays > 1 ? ` If you still wish to proceed, only 1 CL will be deducted and remaining ${totalDays - 1} day(s) will be marked as absent.` : ''}`
-            );
-          }
-        } catch (error) {
-          functions.logger.error('Error checking monthly CL usage:', error);
-          // If there's an error checking monthly usage, allow the request to proceed
-          // This prevents the entire leave application from failing due to index issues
-          functions.logger.warn('Proceeding with CL application despite monthly check error');
-        }
-      }
-
-      // Policy Rule: PL Minimum Days Check (minimum 2 days)
-      if (leaveType === 'paid' && totalDays < 2) {
-        throw new functions.https.HttpsError(
-          "invalid-argument",
-          "Paid Leave requires minimum 2 days per application. Please apply for at least 2 days or use Casual Leave for single day requests."
-        );
-      }
-
-      // Validate leave balance
-      const balanceKey = leaveType === 'optionalHoliday' ? 'optionalHoliday' : 
-                        leaveType === 'sick' ? 'sickLeave' :
-                        leaveType === 'casual' ? 'casualLeave' : 'paidLeave';
-      
-      const availableBalance = currentBalance[balanceKey] || 0;
-      
-      // Calculate actual deduction amount based on policy
-      let actualDeductionAmount = daysToDeduct || totalDays;
-      
-      // For Casual Leave: always deduct only 1 regardless of request duration (like SL)
-      if (leaveType === 'casual') {
-        actualDeductionAmount = 1;
-      }
-      
-      // Check balance availability and handle excess days
-      if (availableBalance < actualDeductionAmount) {
-        // For CL: Allow excess days (only 1 CL deducted, rest marked absent)
-        if (leaveType === 'casual' && totalDays > 1) {
-          const absentDays = totalDays - 1;
-          functions.logger.info(`CL approved with warning: 1 day from balance, ${absentDays} days will be marked absent`);
-          // Continue with the application - don't throw error
-        } 
-        // For PL: Allow excess days (available balance deducted, rest marked absent)
-        else if (leaveType === 'paid' && totalDays > availableBalance && availableBalance > 0) {
-          const absentDays = totalDays - availableBalance;
-          functions.logger.info(`PL approved with warning: ${availableBalance} days from balance, ${absentDays} days will be marked absent`);
-          // Update deduction amount to available balance
-          actualDeductionAmount = availableBalance;
-          // Continue with the application - don't throw error
-        }
-        // For other cases (insufficient balance for minimum requirement)
-        else {
-          const deductionInfo = leaveType === 'sick' && totalDays > 1 
-            ? `${actualDeductionAmount} day (${totalDays} days requested, ${totalDays - actualDeductionAmount} will be marked absent)`
-            : `${actualDeductionAmount} days`;
-          
-          throw new functions.https.HttpsError(
-            "invalid-argument",
-            `Insufficient ${leaveType} balance. Available: ${availableBalance}, Required: ${deductionInfo}`
-          );
-        }
-      }
-      
-      // Override daysToDeduct for policy compliance
-      const finalDeductionAmount = actualDeductionAmount;
-
-      // For optional holidays, validate the selected holiday
-      if (leaveType === 'optionalHoliday' && selectedOptionalHolidayId) {
-        // Get the specific optional holiday from holidays/optional/data subcollection
-        const selectedHolidayDoc = await admin.firestore()
-          .collection('holidays')
-          .doc('optional')
-          .collection('data')
-          .doc(selectedOptionalHolidayId)
-          .get();
-        
-        if (!selectedHolidayDoc.exists) {
-          throw new functions.https.HttpsError(
-            "invalid-argument",
-            "Selected optional holiday not found"
-          );
-        }
-
-        const selectedHoliday = selectedHolidayDoc.data();
-        
-        if (!selectedHoliday || selectedHoliday.type !== 'optional') {
-          throw new functions.https.HttpsError(
-            "invalid-argument",
-            "Selected optional holiday is not available"
-          );
-        }
-
-        // Validate that the start date matches the holiday date
-        const holidayDate = selectedHoliday.date;
-        const requestStartDate = new Date(startDate);
-        const holidayDateObj = holidayDate?.toDate ? holidayDate.toDate() : new Date(holidayDate);
-        
-        // Compare dates without time components
-        const requestDateOnly = new Date(requestStartDate.getFullYear(), requestStartDate.getMonth(), requestStartDate.getDate());
-        const holidayDateOnly = new Date(holidayDateObj.getFullYear(), holidayDateObj.getMonth(), holidayDateObj.getDate());
-        
-        if (requestDateOnly.getTime() !== holidayDateOnly.getTime()) {
-          functions.logger.info(`Date mismatch: Request=${requestDateOnly.toISOString()}, Holiday=${holidayDateOnly.toISOString()}`);
-          throw new functions.https.HttpsError(
-            "invalid-argument",
-            "Leave date must match the selected optional holiday date"
-          );
-        }
-      }
-
-      // Create leave request
-      // Sick Leave and Optional Holidays are auto-approved, others require approval
-      const status = (leaveType === 'sick' || leaveType === 'optionalHoliday') ? 'approved' : 'pending';
-      const approvalInfo = (leaveType === 'sick' || leaveType === 'optionalHoliday') ? {
-        approvedAt: admin.firestore.FieldValue.serverTimestamp(),
-        approvedBy: 'system', // Auto-approved for sick leaves and optional holidays
-        approvalNote: leaveType === 'sick' 
-          ? 'Sick leave auto-approved as per company policy'
-          : 'Optional holiday auto-approved as per company policy'
-      } : {};
-
+      // Create leave request data
       const leaveRequestData = {
         employeeId: context.auth.uid,
         employeeName: userData?.name || 'Unknown',
         employeeEmail: userData?.email || context.auth.token.email,
         leaveType: leaveType,
-        startDate: admin.firestore.Timestamp.fromDate(new Date(startDate)),
-        endDate: admin.firestore.Timestamp.fromDate(new Date(endDate)),
+        startDate: admin.firestore.Timestamp.fromDate(startDate),
+        endDate: admin.firestore.Timestamp.fromDate(endDate),
         totalDays: totalDays,
-        daysToDeduct: finalDeductionAmount, // Store the actual deduction amount
+        daysToDeduct: finalDeductionAmount,
+        deductionDates: deductionDates || [], // Array of dates to be deducted from balance (for reporting)
         reason: reason,
         status: status,
         medicalCertificate: medicalCertificate,
@@ -1753,7 +2009,7 @@ export const applyForLeave = functions.https.onCall(
 
       functions.logger.info(`Leave request created with ID: ${leaveRequestRef.id} for employee: ${empCode}, type: ${leaveTypeCollection}`);
 
-      // Update user's leave balance after approval (for auto-approved SL or immediate deduction)
+      // Update user's leave balance after approval (for auto-approved leaves)
       if (status === 'approved') {
         await admin.firestore()
           .collection('users')
@@ -1766,6 +2022,7 @@ export const applyForLeave = functions.https.onCall(
         functions.logger.info(`Updated leave balance for user: ${context.auth.uid}, deducted: ${finalDeductionAmount} from ${balanceKey}`);
       }
 
+      // Generate success message based on leave type
       let successMessage = '';
       if (leaveType === 'sick') {
         const absentDays = totalDays - finalDeductionAmount;
@@ -1776,8 +2033,8 @@ export const applyForLeave = functions.https.onCall(
         const absentDays = totalDays - finalDeductionAmount;
         successMessage = `Casual leave request submitted successfully and is pending approval.${absentDays > 0 ? ` Note: Only 1 CL will be deducted, ${absentDays} day(s) will be marked as absent if you don't punch in at office.` : ''}`;
       } else if (leaveType === 'paid') {
-        const absentDays = totalDays - actualDeductionAmount;
-        successMessage = `Paid leave request submitted successfully and is pending approval.${absentDays > 0 ? ` Note: ${actualDeductionAmount} day(s) will be deducted from balance, ${absentDays} day(s) will be marked as absent if you don't punch in at office.` : ''}`;
+        const absentDays = totalDays - finalDeductionAmount;
+        successMessage = `Paid leave request submitted successfully and is pending approval.${absentDays > 0 ? ` Note: ${finalDeductionAmount} day(s) will be deducted from balance, ${absentDays} day(s) will be marked as absent if you don't punch in at office.` : ''}`;
       } else {
         successMessage = 'Leave request submitted successfully and is pending approval';
       }
@@ -1964,16 +2221,16 @@ export const cancelLeaveRequest = functions.https.onCall(
           const today = new Date();
           const todayStart = new Date(today.getFullYear(), today.getMonth(), today.getDate());
           
-          // Special rule for multi-day Sick Leave
-          if (leaveType === 'SL' && requestData.totalDays > 1) {
-            // For multi-day SL: only allow cancellation if the first day hasn't passed yet
-            // Since only first day is deducted as SL, once it passes, no point in cancelling
+          // Special rule for Sick Leave (both single and multi-day)
+          if (leaveType === 'SL') {
+            // For SL: allow cancellation until the applied date ends (first day)
+            // Since only first day is deducted as SL, allow cancellation on the same day or before
             const startDate = requestData.startDate;
             if (startDate) {
               const leaveStartDate = startDate.toDate ? startDate.toDate() : new Date(startDate);
               const leaveStartDateStart = new Date(leaveStartDate.getFullYear(), leaveStartDate.getMonth(), leaveStartDate.getDate());
               
-              functions.logger.info(`Date comparison for multi-day SL cancellation:`, {
+              functions.logger.info(`Date comparison for SL cancellation:`, {
                 todayStart: todayStart.toISOString(),
                 leaveStartDateStart: leaveStartDateStart.toISOString(),
                 canCancel: todayStart <= leaveStartDateStart,
@@ -1982,6 +2239,7 @@ export const cancelLeaveRequest = functions.https.onCall(
                 status: requestData?.status
               });
               
+              // Allow cancellation on the same day as start date or before
               return todayStart <= leaveStartDateStart;
             }
           }
@@ -2543,6 +2801,194 @@ export const rejectLeaveRequest = functions.https.onCall(
       throw new functions.https.HttpsError(
         "internal",
         "Failed to reject leave request."
+      );
+    }
+  }
+);
+
+/**
+ * Scheduled function to update leave statuses to 'completed' when leave periods end
+ * Runs daily at 00:05 UTC to check for leaves that have ended
+ */
+export const updateLeaveStatuses = functions.pubsub
+  .schedule('5 0 * * *') // Run at 00:05 UTC every day
+  .timeZone('UTC')
+  .onRun(async (context) => {
+    try {
+      functions.logger.info('Starting scheduled leave status update check...');
+      
+      const today = new Date();
+      const todayStart = new Date(today.getFullYear(), today.getMonth(), today.getDate());
+      
+      // Get all employee documents to check their leave requests
+      const employeesSnapshot = await admin.firestore()
+        .collection('users')
+        .where('role', '==', 'employee')
+        .get();
+      
+      let totalUpdated = 0;
+      
+      for (const employeeDoc of employeesSnapshot.docs) {
+        const empCode = employeeDoc.data().empCode;
+        if (!empCode) continue;
+        
+        // Check all leave types for this employee
+        const leaveTypes = ['SL', 'CL', 'PL', 'OH'];
+        
+        for (const leaveType of leaveTypes) {
+          const leaveRequestsSnapshot = await admin.firestore()
+            .collection('leaveRequests')
+            .doc(empCode)
+            .collection(leaveType)
+            .where('status', '==', 'approved')
+            .get();
+          
+          for (const leaveDoc of leaveRequestsSnapshot.docs) {
+            const leaveData = leaveDoc.data();
+            const startDate = leaveData.startDate?.toDate();
+            const endDate = leaveData.endDate?.toDate();
+            
+            if (startDate && endDate) {
+              let shouldMarkCompleted = false;
+              let completionDate: Date;
+              
+              if (leaveType === 'SL') {
+                // For SL: Mark completed after the applied date (first day) ends
+                // Since only 1 day is deducted regardless of duration
+                const appliedDate = new Date(startDate.getFullYear(), startDate.getMonth(), startDate.getDate());
+                completionDate = appliedDate;
+                shouldMarkCompleted = todayStart > appliedDate;
+              } else {
+                // For other leave types: Mark completed after the entire leave period ends
+                const leaveEndDate = new Date(endDate.getFullYear(), endDate.getMonth(), endDate.getDate());
+                completionDate = leaveEndDate;
+                shouldMarkCompleted = todayStart > leaveEndDate;
+              }
+              
+              if (shouldMarkCompleted) {
+                await leaveDoc.ref.update({
+                  status: 'completed',
+                  completedAt: admin.firestore.FieldValue.serverTimestamp(),
+                  updatedAt: admin.firestore.FieldValue.serverTimestamp()
+                });
+                
+                totalUpdated++;
+                functions.logger.info(
+                  `Updated leave status to completed: ${leaveDoc.id} (${leaveType}) for employee ${empCode} - completion based on ${leaveType === 'SL' ? 'applied date (first day)' : 'end date'}`
+                );
+              }
+            }
+          }
+        }
+      }
+      
+      functions.logger.info(`Leave status update completed. Total leaves updated: ${totalUpdated}`);
+      
+    } catch (error) {
+      functions.logger.error('Error in scheduled leave status update:', error);
+      throw error;
+    }
+  });
+
+/**
+ * Manual function to update a specific leave status to 'completed'
+ * Useful for immediate updates when needed
+ */
+export const updateLeaveStatus = functions.https.onCall(
+  async (data, context) => {
+    try {
+      if (!context.auth) {
+        throw new functions.https.HttpsError(
+          "unauthenticated",
+          "User must be authenticated to update leave status."
+        );
+      }
+
+      const { empCode, leaveType, requestId } = data;
+
+      if (!empCode || !leaveType || !requestId) {
+        throw new functions.https.HttpsError(
+          "invalid-argument",
+          "Employee code, leave type, and request ID are required."
+        );
+      }
+
+      functions.logger.info(`Manual leave status update: ${requestId} for employee: ${empCode}, type: ${leaveType}`);
+
+      // Get the leave request
+      const leaveRequestRef = admin.firestore()
+        .collection('leaveRequests')
+        .doc(empCode)
+        .collection(leaveType)
+        .doc(requestId);
+
+      const leaveRequestDoc = await leaveRequestRef.get();
+
+      if (!leaveRequestDoc.exists) {
+        throw new functions.https.HttpsError(
+          "not-found",
+          "Leave request not found."
+        );
+      }
+
+      const requestData = leaveRequestDoc.data();
+
+      // Only update approved leaves
+      if (requestData?.status !== 'approved') {
+        throw new functions.https.HttpsError(
+          "failed-precondition",
+          "Only approved leaves can be marked as completed."
+        );
+      }
+
+      // Check if leave period has actually ended
+      const today = new Date();
+      const todayStart = new Date(today.getFullYear(), today.getMonth(), today.getDate());
+      
+      // For SL, check appliedDate (first day) completion; for others, check endDate
+      let completionDate: Date | null = null;
+      if (leaveType === 'SL') {
+        const appliedDate = requestData.appliedDate?.toDate();
+        if (appliedDate) {
+          completionDate = new Date(appliedDate.getFullYear(), appliedDate.getMonth(), appliedDate.getDate());
+        }
+      } else {
+        const endDate = requestData.endDate?.toDate();
+        if (endDate) {
+          completionDate = new Date(endDate.getFullYear(), endDate.getMonth(), endDate.getDate());
+        }
+      }
+      
+      if (completionDate && todayStart <= completionDate) {
+        const dateType = leaveType === 'SL' ? 'applied date (first day)' : 'end date';
+        throw new functions.https.HttpsError(
+          "failed-precondition",
+          `Leave period has not ended yet. Status can only be changed to completed after the ${dateType} ends.`
+        );
+      }
+
+      // Update the leave request status
+      await leaveRequestRef.update({
+        status: 'completed',
+        completedAt: admin.firestore.FieldValue.serverTimestamp(),
+        updatedAt: admin.firestore.FieldValue.serverTimestamp()
+      });
+
+      functions.logger.info(`Leave status updated to completed successfully: ${requestId}`);
+
+      return {
+        success: true,
+        message: 'Leave status updated to completed successfully'
+      };
+
+    } catch (error) {
+      functions.logger.error('Error updating leave status:', error);
+      if (error instanceof functions.https.HttpsError) {
+        throw error;
+      }
+      throw new functions.https.HttpsError(
+        "internal",
+        "Failed to update leave status."
       );
     }
   }
