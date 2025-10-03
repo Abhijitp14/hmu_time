@@ -6,6 +6,10 @@ import '../../models/leave_model.dart';
 import '../../models/user_model.dart';
 import '../../services/leave_service.dart';
 import '../../services/auth_service.dart';
+import '../../widgets/leave_widgets/sick_leave_widget.dart';
+import '../../widgets/leave_widgets/casual_leave_widget.dart';
+import '../../widgets/leave_widgets/paid_leave_widget.dart';
+import '../../widgets/leave_widgets/optional_holiday_widget.dart';
 import 'edit_leave_request_screen.dart';
 
 class LeaveApplicationScreen extends StatefulWidget {
@@ -39,10 +43,7 @@ class _LeaveApplicationScreenState extends State<LeaveApplicationScreen>
   DateTime? _endDate;
   bool _isLoading = false;
   
-  // Optional Holiday specific variables
-  List<OptionalHoliday>? _availableHolidays;
-  OptionalHoliday? _selectedOptionalHoliday;
-  bool _loadingHolidays = false;
+
   
   // Sick Leave specific variables
   bool _isSingleDaySL = true; // true for single day, false for multiple days
@@ -71,44 +72,7 @@ class _LeaveApplicationScreenState extends State<LeaveApplicationScreen>
     _loadActiveLeaveRestrictions();
   }
   
-  /// Load available optional holidays from admin
-  Future<void> _loadOptionalHolidays() async {
-    if (_loadingHolidays) return;
-    
-    setState(() {
-      _loadingHolidays = true;
-    });
-    
-    try {
-      final holidays = await _leaveService.getAvailableOptionalHolidays();
-      setState(() {
-        _availableHolidays = holidays;
-        // Reset selection if current selection is no longer available
-        if (_selectedOptionalHoliday != null && 
-            !holidays.any((h) => h.id == _selectedOptionalHoliday!.id)) {
-          _selectedOptionalHoliday = null;
-          _startDate = null;
-          _endDate = null;
-          _updateCalculatedDays();
-        }
-      });
-    } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Failed to load optional holidays: ${e.toString()}'),
-            backgroundColor: Colors.red,
-          ),
-        );
-      }
-    } finally {
-      if (mounted) {
-        setState(() {
-          _loadingHolidays = false;
-        });
-      }
-    }
-  }
+
 
   /// Load active leave restrictions (SL/CL blocked by pending/approved requests)
   Future<void> _loadActiveLeaveRestrictions() async {
@@ -380,7 +344,6 @@ class _LeaveApplicationScreenState extends State<LeaveApplicationScreen>
           // Reset dates and selection when changing leave type
           _startDate = null;
           _endDate = null;
-          _selectedOptionalHoliday = null;
           // Reset SL specific settings
           if (value != LeaveType.sick) {
             _isSingleDaySL = true; // Reset to default
@@ -389,11 +352,7 @@ class _LeaveApplicationScreenState extends State<LeaveApplicationScreen>
           _updatePolicyWarning();
           _updateBalanceInfo(); // Refresh balance when leave type changes
         });
-        
-        // Load optional holidays when selecting optional holiday type
-        if (value == LeaveType.optionalHoliday) {
-          _loadOptionalHolidays();
-        }
+
       } : null,
       title: Row(
         children: [
@@ -462,8 +421,12 @@ class _LeaveApplicationScreenState extends State<LeaveApplicationScreen>
     
     // Check for active leave restrictions
     if (_activeLeaveRestrictions[type] == true) {
-      final leaveTypeName = type == LeaveType.sick ? 'SL' : 'CL';
-      return 'You have an active $leaveTypeName request. Cancel or wait for approval/rejection to apply again.';
+      if (type == LeaveType.sick) {
+        return 'SL not available: Either you have an active request or already used monthly quota (1 SL per month).';
+      } else {
+        final leaveTypeName = type == LeaveType.casual ? 'CL' : 'Leave';
+        return 'You have an active $leaveTypeName request. Cancel or wait for approval/rejection to apply again.';
+      }
     }
     
     return '';
@@ -475,535 +438,106 @@ class _LeaveApplicationScreenState extends State<LeaveApplicationScreen>
   }
 
   Widget _buildDateSelection() {
-    // For optional holidays, show holiday selection instead of date picker
-    if (_selectedLeaveType == LeaveType.optionalHoliday) {
-      return _buildOptionalHolidaySelection();
-    }
-    
-    // For Sick Leave, show specialized SL date selection
-    if (_selectedLeaveType == LeaveType.sick) {
-      return _buildSickLeaveDateSelection();
-    }
-    
-    return Row(
-      children: [
-        Expanded(
-          child: _buildDateField(
-            label: 'Start Date',
-            selectedDate: _startDate,
-            onDateSelected: (date) {
-              setState(() {
-                _startDate = date;
-                if (_endDate != null && _endDate!.isBefore(date)) {
-                  _endDate = null;
-                }
-                _updateCalculatedDays();
-                _updatePolicyWarning();
-              });
-            },
-          ),
-        ),
-        const SizedBox(width: 16),
-        Expanded(
-          child: _buildDateField(
-            label: 'End Date',
-            selectedDate: _endDate,
-            onDateSelected: (date) {
-              setState(() {
-                _endDate = date;
-                _updateCalculatedDays();
-                _updatePolicyWarning();
-              });
-            },
-            firstDate: _startDate,
-          ),
-        ),
-      ],
-    );
-  }
-  
-  Widget _buildOptionalHolidaySelection() {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        const Text(
-          'Select Optional Holiday',
-          style: TextStyle(
-            fontSize: 16,
-            fontWeight: FontWeight.w500,
-          ),
-        ),
-        const SizedBox(height: 8),
-        if (_loadingHolidays)
-          const Center(
-            child: Padding(
-              padding: EdgeInsets.all(16.0),
-              child: CircularProgressIndicator(),
-            ),
-          )
-        else if (_availableHolidays == null || _availableHolidays!.isEmpty)
-          Container(
-            padding: const EdgeInsets.all(16),
-            decoration: BoxDecoration(
-              border: Border.all(color: Colors.orange.shade300),
-              borderRadius: BorderRadius.circular(8),
-              color: Colors.orange.shade50,
-            ),
-            child: Row(
-              children: [
-                Icon(Icons.info_outline, color: Colors.orange.shade700, size: 20),
-                const SizedBox(width: 8),
-                const Expanded(
-                  child: Text(
-                    'No optional holidays available. Please contact HR.',
-                    style: TextStyle(color: Colors.black87),
-                  ),
-                ),
-              ],
-            ),
-          )
-        else
-          Container(
-            decoration: BoxDecoration(
-              border: Border.all(color: Colors.grey.shade400),
-              borderRadius: BorderRadius.circular(8),
-            ),
-            child: Column(
-              children: _availableHolidays!.map((holiday) {
-                final isSelected = _selectedOptionalHoliday?.id == holiday.id;
-                return InkWell(
-                  onTap: () {
-                    setState(() {
-                      _selectedOptionalHoliday = holiday;
-                      _startDate = holiday.date;
-                      _endDate = holiday.date; // Single day
-                      _updateCalculatedDays();
-                      _updatePolicyWarning();
-                    });
-                  },
-                  child: Container(
-                    padding: const EdgeInsets.all(12),
-                    decoration: BoxDecoration(
-                      color: isSelected ? Theme.of(context).primaryColor.withOpacity(0.1) : null,
-                      border: isSelected ? Border.all(color: Theme.of(context).primaryColor) : null,
-                      borderRadius: BorderRadius.circular(8),
-                    ),
-                    child: Row(
-                      children: [
-                        Icon(
-                          isSelected ? Icons.radio_button_checked : Icons.radio_button_off,
-                          color: isSelected ? Theme.of(context).primaryColor : Colors.grey,
-                          size: 20,
-                        ),
-                        const SizedBox(width: 12),
-                        Expanded(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Text(
-                                holiday.name,
-                                style: TextStyle(
-                                  fontWeight: isSelected ? FontWeight.w600 : FontWeight.w500,
-                                  color: isSelected ? Theme.of(context).primaryColor : Colors.black87,
-                                ),
-                              ),
-                              const SizedBox(height: 2),
-                              Text(
-                                DateFormat('EEEE, MMMM dd, yyyy').format(holiday.date),
-                                style: TextStyle(
-                                  fontSize: 12,
-                                  color: Colors.grey.shade600,
-                                ),
-                              ),
-                              if (holiday.description.isNotEmpty) ...[
-                                const SizedBox(height: 2),
-                                Text(
-                                  holiday.description,
-                                  style: TextStyle(
-                                    fontSize: 11,
-                                    color: Colors.grey.shade500,
-                                  ),
-                                ),
-                              ],
-                            ],
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                );
-              }).toList(),
-            ),
-          ),
-        if (_selectedOptionalHoliday != null) ...[
-          const SizedBox(height: 12),
-          Container(
-            padding: const EdgeInsets.all(12),
-            decoration: BoxDecoration(
-              color: Colors.green.shade50,
-              border: Border.all(color: Colors.green.shade300),
-              borderRadius: BorderRadius.circular(8),
-            ),
-            child: Row(
-              children: [
-                Icon(Icons.check_circle, color: Colors.green.shade600, size: 16),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: Text(
-                    'Selected: ${_selectedOptionalHoliday!.name} on ${DateFormat('MMM dd, yyyy').format(_selectedOptionalHoliday!.date)}',
-                    style: TextStyle(
-                      color: Colors.green.shade800,
-                      fontSize: 12,
-                      fontWeight: FontWeight.w500,
-                    ),
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ],
-      ],
-    );
-  }
-
-  Widget _buildSickLeaveDateSelection() {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        const Text(
-          'Sick Leave Duration',
-          style: TextStyle(
-            fontSize: 16,
-            fontWeight: FontWeight.w500,
-          ),
-        ),
-        const SizedBox(height: 12),
-        
-        // Single vs Multiple day selection
-        Container(
-          padding: const EdgeInsets.all(12),
-          decoration: BoxDecoration(
-            border: Border.all(color: Colors.grey.shade300),
-            borderRadius: BorderRadius.circular(8),
-            color: Colors.grey.shade50,
-          ),
-          child: Column(
-            children: [
-              RadioListTile<bool>(
-                value: true,
-                groupValue: _isSingleDaySL,
-                onChanged: (value) {
-                  setState(() {
-                    _isSingleDaySL = value!;
-                    _endDate = null; // Reset end date when switching
-                    _updateCalculatedDays();
-                    _updatePolicyWarning();
-                  });
-                },
-                title: const Text('Single Day', style: TextStyle(fontSize: 14)),
-                contentPadding: EdgeInsets.zero,
-                dense: true,
-              ),
-              RadioListTile<bool>(
-                value: false,
-                groupValue: _isSingleDaySL,
-                onChanged: (value) {
-                  setState(() {
-                    _isSingleDaySL = value!;
-                    _endDate = null; // Reset end date when switching
-                    _updateCalculatedDays();
-                    _updatePolicyWarning();
-                  });
-                },
-                title: const Text('Multiple Days', style: TextStyle(fontSize: 14)),
-                contentPadding: EdgeInsets.zero,
-                dense: true,
-              ),
-            ],
-          ),
-        ),
-        
-        const SizedBox(height: 16),
-        
-        // Date selection based on single/multiple choice
-        if (_isSingleDaySL) ...[
-          _buildSickLeaveSingleDateField(),
-        ] else ...[
-          Row(
-            children: [
-              Expanded(
-                child: _buildSickLeaveDateField(
-                  label: 'Start Date',
-                  selectedDate: _startDate,
-                  onDateSelected: (date) {
-                    setState(() {
-                      _startDate = date;
-                      if (_endDate != null && _endDate!.isBefore(date)) {
-                        _endDate = null;
-                      }
-                      _updateCalculatedDays();
-                      _updatePolicyWarning();
-                    });
-                  },
-                ),
-              ),
-              const SizedBox(width: 16),
-              Expanded(
-                child: _buildSickLeaveDateField(
-                  label: 'End Date',
-                  selectedDate: _endDate,
-                  onDateSelected: (date) {
-                    setState(() {
-                      _endDate = date;
-                      _updateCalculatedDays();
-                      _updatePolicyWarning();
-                    });
-                  },
-                  firstDate: _startDate,
-                ),
-              ),
-            ],
-          ),
-        ],
-        
-        // SL Policy Notice
-        const SizedBox(height: 12),
-        Container(
-          padding: const EdgeInsets.all(12),
-          decoration: BoxDecoration(
-            color: Colors.blue.shade50,
-            border: Border.all(color: Colors.blue.shade200),
-            borderRadius: BorderRadius.circular(8),
-          ),
-          child: Row(
-            children: [
-              Icon(Icons.info_outline, color: Colors.blue.shade700, size: 20),
-              const SizedBox(width: 8),
-              Expanded(
-                child: Text(
-                  _isSingleDaySL 
-                    ? 'Sick Leave Policy: Can select from past 7 days to next 2 working days. Only 1 day deducted from balance.'
-                    : 'Sick Leave Policy: Start date from past 7 days to next 2 working days, end date up to 7 days from start. Only 1 day deducted from balance, others marked absent.',
-                  style: TextStyle(
-                    color: Colors.blue.shade700,
-                    fontSize: 12,
-                  ),
-                ),
-              ),
-            ],
-          ),
-        ),
-      ],
-    );
-  }
-
-  Widget _buildSickLeaveSingleDateField() {
-    return _buildSickLeaveDateField(
-      label: 'Sick Leave Date',
-      selectedDate: _startDate,
-      onDateSelected: (date) {
-        setState(() {
-          _startDate = date;
-          _endDate = date; // For single day, end date is same as start date
-          _updateCalculatedDays();
-          _updatePolicyWarning();
-        });
-      },
-    );
-  }
-
-  Widget _buildSickLeaveDateField({
-    required String label,
-    required DateTime? selectedDate,
-    required Function(DateTime) onDateSelected,
-    DateTime? firstDate,
-  }) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Text(
-          label,
-          style: const TextStyle(
-            fontSize: 14,
-            fontWeight: FontWeight.w500,
-          ),
-        ),
-        const SizedBox(height: 4),
-        InkWell(
-          onTap: () => _selectSickLeaveDate(onDateSelected, firstDate, isEndDate: label == 'End Date'),
-          child: Container(
-            padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 8),
-            decoration: BoxDecoration(
-              border: Border.all(color: Colors.grey.shade400),
-              borderRadius: BorderRadius.circular(8),
-            ),
-            child: Row(
-              children: [
-                Icon(Icons.calendar_today, size: 16, color: Colors.grey.shade600),
-                const SizedBox(width: 8),
-                Text(
-                  selectedDate != null 
-                      ? DateFormat('MMM dd, yyyy').format(selectedDate)
-                      : 'Select Date',
-                  style: TextStyle(
-                    color: selectedDate != null ? null : Colors.grey.shade600,
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ),
-      ],
-    );
-  }
-
-  Widget _buildDateField({
-    required String label,
-    required DateTime? selectedDate,
-    required Function(DateTime) onDateSelected,
-    DateTime? firstDate,
-  }) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Text(
-          label,
-          style: const TextStyle(
-            fontSize: 14,
-            fontWeight: FontWeight.w500,
-          ),
-        ),
-        const SizedBox(height: 4),
-        InkWell(
-          onTap: () => _selectDate(onDateSelected, firstDate),
-          child: Container(
-            padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 8),
-            decoration: BoxDecoration(
-              border: Border.all(color: Colors.grey.shade400),
-              borderRadius: BorderRadius.circular(8),
-            ),
-            child: Row(
-              children: [
-                Icon(Icons.calendar_today, size: 16, color: Colors.grey.shade600),
-                const SizedBox(width: 8),
-                Text(
-                  selectedDate != null 
-                      ? DateFormat('MMM dd, yyyy').format(selectedDate)
-                      : 'Select Date',
-                  style: TextStyle(
-                    color: selectedDate != null ? null : Colors.grey.shade600,
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ),
-      ],
-    );
-  }
-
-  Future<void> _selectDate(Function(DateTime) onDateSelected, DateTime? firstDate) async {
-    final DateTime calculatedFirstDate = firstDate ?? DateTime.now();
-    final DateTime today = DateTime.now();
-    
-    // Ensure initialDate is not before firstDate
-    final DateTime initialDate = calculatedFirstDate.isAfter(today) ? calculatedFirstDate : today;
-    
-    final DateTime? picked = await showDatePicker(
-      context: context,
-      initialDate: initialDate,
-      firstDate: calculatedFirstDate,
-      lastDate: DateTime.now().add(const Duration(days: 365)),
-    );
-    
-    if (picked != null) {
-      onDateSelected(picked);
+    switch (_selectedLeaveType) {
+      case LeaveType.sick:
+        return SickLeaveWidget(
+          user: widget.user,
+          startDate: _startDate,
+          endDate: _endDate,
+          isSingleDay: _isSingleDaySL,
+          onSingleDayChanged: (value) {
+            setState(() {
+              _isSingleDaySL = value;
+              if (_isSingleDaySL) {
+                _endDate = _startDate;
+              } else {
+                _endDate = null;
+              }
+              _updateCalculatedDays();
+              _updatePolicyWarning();
+            });
+          },
+          onStartDateChanged: (date) {
+            setState(() {
+              _startDate = date;
+              if (_isSingleDaySL || (_endDate != null && _endDate!.isBefore(date))) {
+                _endDate = _isSingleDaySL ? date : null;
+              }
+              _updateCalculatedDays();
+              _updatePolicyWarning();
+            });
+          },
+          onEndDateChanged: (date) {
+            setState(() {
+              _endDate = date;
+              _updateCalculatedDays();
+              _updatePolicyWarning();
+            });
+          },
+        );
+      case LeaveType.casual:
+        return CasualLeaveWidget(
+          user: widget.user,
+          startDate: _startDate,
+          endDate: _endDate,
+          onStartDateChanged: (date) {
+            setState(() {
+              _startDate = date;
+              if (_endDate != null && _endDate!.isBefore(date)) {
+                _endDate = null;
+              }
+              _updateCalculatedDays();
+              _updatePolicyWarning();
+            });
+          },
+          onEndDateChanged: (date) {
+            setState(() {
+              _endDate = date;
+              _updateCalculatedDays();
+              _updatePolicyWarning();
+            });
+          },
+        );
+      case LeaveType.paid:
+        return PaidLeaveWidget(
+          user: widget.user,
+          startDate: _startDate,
+          endDate: _endDate,
+          onStartDateChanged: (date) {
+            setState(() {
+              _startDate = date;
+              if (_endDate != null && _endDate!.isBefore(date)) {
+                _endDate = null;
+              }
+              _updateCalculatedDays();
+              _updatePolicyWarning();
+            });
+          },
+          onEndDateChanged: (date) {
+            setState(() {
+              _endDate = date;
+              _updateCalculatedDays();
+              _updatePolicyWarning();
+            });
+          },
+        );
+      case LeaveType.optionalHoliday:
+        return OptionalHolidayWidget(
+          user: widget.user,
+          startDate: _startDate,
+          onStartDateChanged: (date) {
+            setState(() {
+              _startDate = date;
+              _endDate = date; // OH is always single day
+              _updateCalculatedDays();
+              _updatePolicyWarning();
+            });
+          },
+        );
     }
   }
 
-  Future<void> _selectSickLeaveDate(Function(DateTime) onDateSelected, DateTime? firstDate, {bool isEndDate = false}) async {
-    final DateTime today = DateTime.now();
-    
-    DateTime maxDate = today; // Initialize with default
-    DateTime startDate;
-    String helpText;
-    
-    if (isEndDate && firstDate != null) {
-      // For end date in multiple days: up to 6 working days from start date (excluding Sunday)
-      startDate = firstDate;
-      
-      // Calculate 6 working days from start date
-      DateTime currentDate = firstDate;
-      int workingDaysCount = 0;
-      while (workingDaysCount < 6) {
-        currentDate = currentDate.add(const Duration(days: 1));
-        if (currentDate.weekday != DateTime.sunday) {
-          workingDaysCount++;
-        }
-      }
-      maxDate = currentDate;
-      helpText = 'Select End Date (up to 6 working days from start)';
-    } else {
-      // For start date or single day selection
-      startDate = today; // Start from today only
-      
-      if (_isSingleDaySL) {
-        // Single day: today + next 2 working days (excluding Sunday)
-        DateTime currentDate = today;
-        int workingDaysFound = 0;
-        
-        while (workingDaysFound < 3) { // Today + next 2 = 3 total days
-          if (currentDate.weekday != DateTime.sunday) {
-            maxDate = currentDate;
-            workingDaysFound++;
-          }
-          if (workingDaysFound < 3) {
-            currentDate = currentDate.add(const Duration(days: 1));
-          }
-        }
-        helpText = 'Select Sick Leave Date (today or next 2 working days)';
-      } else {
-        // Multiple days: today + next 6 working days (excluding Sunday)  
-        DateTime currentDate = today;
-        int workingDaysFound = 0;
-        
-        while (workingDaysFound < 7) { // Today + next 6 = 7 total days
-          if (currentDate.weekday != DateTime.sunday) {
-            maxDate = currentDate;
-            workingDaysFound++;
-          }
-          if (workingDaysFound < 7) {
-            currentDate = currentDate.add(const Duration(days: 1));
-          }
-        }
-        helpText = 'Select Start Date (today or next 6 working days)';
-      }
-    }
-    
-    // Set initial date to be at least the firstDate to avoid assertion error
-    final DateTime initialDate = startDate.isAfter(today) ? startDate : today;
-    
-    final DateTime? picked = await showDatePicker(
-      context: context,
-      initialDate: initialDate,
-      firstDate: startDate,
-      lastDate: maxDate,
-      helpText: helpText,
-      confirmText: 'CONFIRM',
-      cancelText: 'CANCEL',
-      selectableDayPredicate: (DateTime date) {
-        // Always exclude Sundays for sick leave
-        if (date.weekday == DateTime.sunday) {
-          return false;
-        }
-        return true;
-      },
-    );
-    
-    if (picked != null) {
-      onDateSelected(picked);
-    }
-  }
+
 
   Widget _buildCalculatedDaysInfo() {
     if (_calculatedDays == null) return const SizedBox.shrink();
@@ -1186,10 +720,8 @@ class _LeaveApplicationScreenState extends State<LeaveApplicationScreen>
   bool _canSubmit() {
     bool hasValidDates = _startDate != null && _endDate != null;
     
-    // For optional holidays, also check that a holiday is selected
+    // For optional holidays, reason is not required
     if (_selectedLeaveType == LeaveType.optionalHoliday) {
-      hasValidDates = hasValidDates && _selectedOptionalHoliday != null;
-      // For optional holidays, reason is not required
       return !_isLoading && hasValidDates;
     }
     
@@ -1294,8 +826,7 @@ class _LeaveApplicationScreenState extends State<LeaveApplicationScreen>
       // Clear reason text
       _reasonController.clear();
       
-      // Clear optional holiday selection
-      _selectedOptionalHoliday = null;
+
       
       // Reset sick leave to single day mode
       _isSingleDaySL = true;
@@ -1336,10 +867,7 @@ class _LeaveApplicationScreenState extends State<LeaveApplicationScreen>
       // Refresh user balance from database
       await _refreshUserBalance();
       
-      // Refresh optional holidays if currently selected
-      if (_selectedLeaveType == LeaveType.optionalHoliday) {
-        await _loadOptionalHolidays();
-      }
+
       
       // Show success feedback
       if (mounted) {
@@ -1420,7 +948,7 @@ class _LeaveApplicationScreenState extends State<LeaveApplicationScreen>
         endDate: _endDate!,
         reason: _reasonController.text.trim(),
         user: widget.user,
-        selectedOptionalHolidayId: _selectedOptionalHoliday?.id,
+        selectedOptionalHolidayId: null,
       );
 
       if (result.success) {
@@ -1603,11 +1131,20 @@ class _LeaveApplicationScreenState extends State<LeaveApplicationScreen>
     if (displayStatus == 'approved') {
       final DateTime today = DateTime.now();
       final DateTime todayStart = DateTime(today.year, today.month, today.day);
-      final DateTime leaveEndDate = DateTime(leave.endDate.year, leave.endDate.month, leave.endDate.day);
       
-      // For all approved leaves: show "completed" if the leave period has ended
-      if (todayStart.isAfter(leaveEndDate)) {
-        displayStatus = 'completed';
+      if (leave.leaveType == LeaveType.sick) {
+        // For SL: show "completed" if the applied date (first day) has ended
+        // Since only 1 day is deducted regardless of duration
+        final DateTime appliedDate = DateTime(leave.startDate.year, leave.startDate.month, leave.startDate.day);
+        if (todayStart.isAfter(appliedDate)) {
+          displayStatus = 'completed';
+        }
+      } else {
+        // For other leave types: show "completed" if the entire leave period has ended
+        final DateTime leaveEndDate = DateTime(leave.endDate.year, leave.endDate.month, leave.endDate.day);
+        if (todayStart.isAfter(leaveEndDate)) {
+          displayStatus = 'completed';
+        }
       }
     }
     
@@ -1910,11 +1447,18 @@ class _LeaveApplicationScreenState extends State<LeaveApplicationScreen>
     
     // For approved requests: check specific rules based on leave type
     if (leave.status.toLowerCase() == 'approved') {
-      final DateTime leaveStartDate = DateTime(leave.startDate.year, leave.startDate.month, leave.startDate.day);
-      
-      // For all approved leaves: once the first day has started/passed, no modification allowed
-      // This is because the leave is considered "in progress" or "completed"
-      return todayStart.isBefore(leaveStartDate);
+      if (leave.leaveType == LeaveType.sick) {
+        // For SL: Allow edit/cancel until the applied date ends (first day for SL)
+        // Since SL only deducts 1 day regardless of duration, the "applied date" is the first day
+        final DateTime leaveStartDate = DateTime(leave.startDate.year, leave.startDate.month, leave.startDate.day);
+        
+        // Allow modification until the end of the first day (not just before it starts)
+        return todayStart.isAtSameMomentAs(leaveStartDate) || todayStart.isBefore(leaveStartDate);
+      } else {
+        // For other leave types (CL, PL, OH): only allow before start date
+        final DateTime leaveStartDate = DateTime(leave.startDate.year, leave.startDate.month, leave.startDate.day);
+        return todayStart.isBefore(leaveStartDate);
+      }
     }
     
     // For other statuses (rejected, cancelled), no modification allowed
@@ -1930,13 +1474,14 @@ class _LeaveApplicationScreenState extends State<LeaveApplicationScreen>
       return true;
     }
     
-    // For approved requests: only allow editing for Sick Leave and only before start date
+    // For approved requests: only allow editing for Sick Leave and until applied date ends
     if (leave.status.toLowerCase() == 'approved') {
       if (leave.leaveType == LeaveType.sick) {
         final DateTime leaveStartDate = DateTime(leave.startDate.year, leave.startDate.month, leave.startDate.day);
         
-        // For SL: only allow editing if the first day hasn't started yet
-        return todayStart.isBefore(leaveStartDate);
+        // For SL: allow editing until the applied date ends (same day or before start date)
+        // Since SL only deducts 1 day regardless of duration, modification allowed on the first day
+        return todayStart.isAtSameMomentAs(leaveStartDate) || todayStart.isBefore(leaveStartDate);
       }
       
       // For approved CL, PL, OH - no editing allowed
