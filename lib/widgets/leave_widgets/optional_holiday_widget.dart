@@ -2,18 +2,59 @@ import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import '../../models/leave_model.dart';
 import '../../models/user_model.dart';
+import '../../services/leave_service.dart';
 
-class OptionalHolidayWidget extends StatelessWidget {
+class OptionalHolidayWidget extends StatefulWidget {
   final AppUser user;
   final DateTime? startDate;
   final Function(DateTime) onStartDateChanged;
+  final Function(String?) onHolidaySelected;
+  final String? selectedOptionalHolidayId;
 
   const OptionalHolidayWidget({
     super.key,
     required this.user,
     required this.startDate,
     required this.onStartDateChanged,
+    required this.onHolidaySelected,
+    this.selectedOptionalHolidayId,
   });
+
+  @override
+  State<OptionalHolidayWidget> createState() => _OptionalHolidayWidgetState();
+}
+
+class _OptionalHolidayWidgetState extends State<OptionalHolidayWidget> {
+  final LeaveService _leaveService = LeaveService();
+  List<OptionalHoliday> _availableHolidays = [];
+  bool _loadingHolidays = false;
+  String? _errorMessage;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadOptionalHolidays();
+  }
+
+  Future<void> _loadOptionalHolidays() async {
+    setState(() {
+      _loadingHolidays = true;
+      _errorMessage = null;
+    });
+
+    try {
+      final holidays = await _leaveService.getAvailableOptionalHolidays();
+      setState(() {
+        _availableHolidays = holidays;
+        _loadingHolidays = false;
+      });
+    } catch (e) {
+      setState(() {
+        _errorMessage = 'Failed to load optional holidays: $e';
+        _loadingHolidays = false;
+      });
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -21,7 +62,7 @@ class OptionalHolidayWidget extends StatelessWidget {
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         const Text(
-          'Optional Holiday Date',
+          'Select Optional Holiday',
           style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
         ),
         const SizedBox(height: 8),
@@ -31,12 +72,73 @@ class OptionalHolidayWidget extends StatelessWidget {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                _buildDateField(
-                  context: context,
-                  label: 'Holiday Date',
-                  selectedDate: startDate,
-                  onDateSelected: onStartDateChanged,
-                ),
+                if (_loadingHolidays) ...[
+                  const Center(
+                    child: Padding(
+                      padding: EdgeInsets.all(16),
+                      child: Column(
+                        children: [
+                          CircularProgressIndicator(),
+                          SizedBox(height: 8),
+                          Text('Loading optional holidays...'),
+                        ],
+                      ),
+                    ),
+                  ),
+                ] else if (_errorMessage != null) ...[
+                  Container(
+                    padding: const EdgeInsets.all(12),
+                    decoration: BoxDecoration(
+                      color: Colors.red.shade50,
+                      border: Border.all(color: Colors.red.shade200),
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: Row(
+                      children: [
+                        Icon(Icons.error, color: Colors.red.shade600),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: Text(
+                            _errorMessage!,
+                            style: TextStyle(color: Colors.red.shade800),
+                          ),
+                        ),
+                        TextButton(
+                          onPressed: _loadOptionalHolidays,
+                          child: const Text('Retry'),
+                        ),
+                      ],
+                    ),
+                  ),
+                ] else if (_availableHolidays.isEmpty) ...[
+                  Container(
+                    padding: const EdgeInsets.all(12),
+                    decoration: BoxDecoration(
+                      color: Colors.orange.shade50,
+                      border: Border.all(color: Colors.orange.shade200),
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: Row(
+                      children: [
+                        Icon(Icons.info, color: Colors.orange.shade600),
+                        const SizedBox(width: 8),
+                        const Expanded(
+                          child: Text(
+                            'No optional holidays are available at the moment. Please contact HR for more information.',
+                            style: TextStyle(color: Colors.orange),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ] else ...[
+                  const Text(
+                    'Available Optional Holidays',
+                    style: TextStyle(fontWeight: FontWeight.w500),
+                  ),
+                  const SizedBox(height: 8),
+                  ...(_availableHolidays.map((holiday) => _buildHolidayTile(holiday))),
+                ],
                 const SizedBox(height: 16),
                 Container(
                   padding: const EdgeInsets.all(12),
@@ -58,11 +160,11 @@ class OptionalHolidayWidget extends StatelessWidget {
                         style: TextStyle(fontSize: 12, color: Colors.purple),
                       ),
                       Text(
-                        '• Must be applied at least 1 day in advance',
+                        '• Must select from company-designated optional holidays',
                         style: TextStyle(fontSize: 12, color: Colors.purple),
                       ),
                       Text(
-                        '• Limited to company-designated optional holidays',
+                        '• Auto-approved upon selection',
                         style: TextStyle(fontSize: 12, color: Colors.purple),
                       ),
                       Text(
@@ -80,61 +182,101 @@ class OptionalHolidayWidget extends StatelessWidget {
     );
   }
 
-  Widget _buildDateField({
-    required BuildContext context,
-    required String label,
-    required DateTime? selectedDate,
-    required Function(DateTime) onDateSelected,
-  }) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Text(
-          label,
-          style: const TextStyle(fontWeight: FontWeight.w500),
-        ),
-        const SizedBox(height: 8),
-        InkWell(
-          onTap: () => _selectDate(context, onDateSelected),
-          child: Container(
-            padding: const EdgeInsets.all(16),
-            decoration: BoxDecoration(
-              border: Border.all(color: Colors.grey.shade300),
-              borderRadius: BorderRadius.circular(8),
+  Widget _buildHolidayTile(OptionalHoliday holiday) {
+    final isSelected = widget.selectedOptionalHolidayId == holiday.id;
+    final formattedDate = DateFormat('MMM dd, yyyy (EEEE)').format(holiday.date);
+    
+    // Check if holiday is in the past
+    final isPastDate = holiday.isPastDate;
+    
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 8),
+      child: InkWell(
+        onTap: isPastDate ? null : () {
+          print('OH Selected: ${holiday.id} -> ${holiday.date.toIso8601String()}');
+          widget.onHolidaySelected(holiday.id);
+          widget.onStartDateChanged(holiday.date);
+        },
+        child: Container(
+          padding: const EdgeInsets.all(12),
+          decoration: BoxDecoration(
+            color: isPastDate 
+                ? Colors.grey.shade100 
+                : isSelected 
+                    ? Colors.purple.shade100 
+                    : Colors.white,
+            border: Border.all(
+              color: isPastDate 
+                  ? Colors.grey.shade300 
+                  : isSelected 
+                      ? Colors.purple.shade400 
+                      : Colors.grey.shade300,
+              width: isSelected ? 2 : 1,
             ),
-            child: Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                Text(
-                  selectedDate != null
-                      ? DateFormat('MMM dd, yyyy').format(selectedDate)
-                      : 'Select Date',
-                  style: TextStyle(
-                    color: selectedDate != null ? Colors.black : Colors.grey,
-                  ),
+            borderRadius: BorderRadius.circular(8),
+          ),
+          child: Row(
+            children: [
+              Radio<String>(
+                value: holiday.id,
+                groupValue: widget.selectedOptionalHolidayId,
+                onChanged: isPastDate ? null : (value) {
+                  print('OH Radio Selected: $value -> ${holiday.date.toIso8601String()}');
+                  widget.onHolidaySelected(value);
+                  widget.onStartDateChanged(holiday.date);
+                },
+                activeColor: Colors.purple,
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      holiday.name,
+                      style: TextStyle(
+                        fontWeight: FontWeight.w500,
+                        color: isPastDate ? Colors.grey : Colors.black,
+                      ),
+                    ),
+                    Text(
+                      formattedDate,
+                      style: TextStyle(
+                        fontSize: 13,
+                        color: isPastDate ? Colors.grey : Colors.grey.shade600,
+                      ),
+                    ),
+                    if (holiday.description.isNotEmpty) ...[
+                      const SizedBox(height: 2),
+                      Text(
+                        holiday.description,
+                        style: TextStyle(
+                          fontSize: 11,
+                          color: isPastDate ? Colors.grey : Colors.grey.shade500,
+                          fontStyle: FontStyle.italic,
+                        ),
+                      ),
+                    ],
+                    if (isPastDate) ...[
+                      const SizedBox(height: 4),
+                      Text(
+                        'Past Date',
+                        style: TextStyle(
+                          fontSize: 11,
+                          color: Colors.red.shade600,
+                          fontStyle: FontStyle.italic,
+                        ),
+                      ),
+                    ],
+                  ],
                 ),
-                const Icon(Icons.calendar_today, size: 20, color: Colors.grey),
-              ],
-            ),
+              ),
+            ],
           ),
         ),
-      ],
+      ),
     );
   }
 
-  Future<void> _selectDate(BuildContext context, Function(DateTime) onDateSelected) async {
-    // For OH, must be applied at least 1 day in advance
-    final DateTime firstDate = DateTime.now().add(const Duration(days: 1));
-    
-    final DateTime? picked = await showDatePicker(
-      context: context,
-      initialDate: firstDate,
-      firstDate: firstDate,
-      lastDate: DateTime.now().add(const Duration(days: 365)),
-    );
-    
-    if (picked != null) {
-      onDateSelected(picked);
-    }
-  }
+
 }

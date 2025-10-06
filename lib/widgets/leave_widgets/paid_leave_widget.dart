@@ -74,15 +74,27 @@ class PaidLeaveWidget extends StatelessWidget {
                       ),
                       SizedBox(height: 4),
                       Text(
-                        '• Can apply at least 2 working days in advance',
+                        '• Must apply at least 2 days in advance (no current/next day applications)',
                         style: TextStyle(fontSize: 12, color: Colors.blue),
                       ),
                       Text(
-                        '• Maximum 5 consecutive days per application',
+                        '• Minimum 2 days required per application',
                         style: TextStyle(fontSize: 12, color: Colors.blue),
                       ),
                       Text(
-                        '• Cannot exceed annual entitlement',
+                        '• Only one PL application allowed per month',
+                        style: TextStyle(fontSize: 12, color: Colors.blue),
+                      ),
+                      Text(
+                        '• Start date: 2 days from today to next 4 weeks',
+                        style: TextStyle(fontSize: 12, color: Colors.blue),
+                      ),
+                      Text(
+                        '• End date: From start date to next 4 weeks',
+                        style: TextStyle(fontSize: 12, color: Colors.blue),
+                      ),
+                      Text(
+                        '• Sundays are excluded from selection',
                         style: TextStyle(fontSize: 12, color: Colors.blue),
                       ),
                     ],
@@ -140,31 +152,53 @@ class PaidLeaveWidget extends StatelessWidget {
   }
 
   Future<void> _selectDate(BuildContext context, Function(DateTime) onDateSelected, DateTime? firstDate) async {
-    // For PL, ensure at least 2 working days in advance
     final DateTime today = DateTime.now();
-    int workingDaysAdded = 0;
-    DateTime calculatedFirstDate = today;
     
-    // Calculate minimum date (2 working days from today)
-    while (workingDaysAdded < 2) {
-      calculatedFirstDate = calculatedFirstDate.add(const Duration(days: 1));
-      // Skip weekends (Saturday = 6, Sunday = 7)
-      if (calculatedFirstDate.weekday != DateTime.saturday && 
-          calculatedFirstDate.weekday != DateTime.sunday) {
-        workingDaysAdded++;
+    // Helper function to find the next valid (non-Sunday) date
+    DateTime findNextValidDate(DateTime date) {
+      DateTime validDate = date;
+      while (validDate.weekday == DateTime.sunday) {
+        validDate = validDate.add(const Duration(days: 1));
       }
+      return validDate;
     }
     
-    // Use firstDate if it's later than the calculated minimum
-    if (firstDate != null && firstDate.isAfter(calculatedFirstDate)) {
+    // For start date: 2 days from current date till next 4 weeks
+    // For end date: from selected start date till next 4 weeks
+    DateTime calculatedFirstDate;
+    DateTime calculatedLastDate;
+    DateTime initialDate;
+    
+    if (firstDate == null) {
+      // This is start date selection
+      // Start from 2 days ahead (cannot apply for current day or next day)
+      calculatedFirstDate = today.add(const Duration(days: 2));
+      calculatedLastDate = today.add(const Duration(days: 28)); // 4 weeks
+      
+      // Ensure initial date is not a Sunday
+      initialDate = findNextValidDate(calculatedFirstDate);
+      // If initial date moves beyond the first date, update first date as well
+      if (initialDate != calculatedFirstDate) {
+        calculatedFirstDate = initialDate;
+      }
+    } else {
+      // This is end date selection (firstDate is the selected start date)
       calculatedFirstDate = firstDate;
+      calculatedLastDate = firstDate.add(const Duration(days: 28)); // 4 weeks from start date
+      
+      // Ensure initial date is not a Sunday
+      initialDate = findNextValidDate(calculatedFirstDate);
     }
     
     final DateTime? picked = await showDatePicker(
       context: context,
-      initialDate: calculatedFirstDate,
+      initialDate: initialDate,
       firstDate: calculatedFirstDate,
-      lastDate: DateTime.now().add(const Duration(days: 365)),
+      lastDate: calculatedLastDate,
+      selectableDayPredicate: (DateTime day) {
+        // Exclude Sundays (weekday 7 = Sunday)
+        return day.weekday != DateTime.sunday;
+      },
     );
     
     if (picked != null) {

@@ -48,6 +48,9 @@ class _LeaveApplicationScreenState extends State<LeaveApplicationScreen>
   // Sick Leave specific variables
   bool _isSingleDaySL = true; // true for single day, false for multiple days
   
+  // Optional Holiday specific variables
+  String? _selectedOptionalHolidayId;
+  
   String? _calculatedDays;
   String? _balanceInfo;
   String? _policyWarning;
@@ -315,6 +318,8 @@ class _LeaveApplicationScreenState extends State<LeaveApplicationScreen>
   }
 
   Widget _buildLeaveTypeSelection() {
+    final availableTypes = LeaveType.values.where((type) => _isLeaveTypeEligible(type)).toList();
+    
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -327,6 +332,32 @@ class _LeaveApplicationScreenState extends State<LeaveApplicationScreen>
         ),
         const SizedBox(height: 8),
         ...LeaveType.values.map((type) => _buildLeaveTypeRadio(type)),
+        if (availableTypes.isEmpty) ...[
+          const SizedBox(height: 16),
+          Container(
+            padding: const EdgeInsets.all(12),
+            decoration: BoxDecoration(
+              color: Colors.orange.shade50,
+              border: Border.all(color: Colors.orange.shade200),
+              borderRadius: BorderRadius.circular(8),
+            ),
+            child: Row(
+              children: [
+                Icon(Icons.warning, color: Colors.orange.shade600, size: 20),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    'All leave types are currently unavailable. Please use Leave Without Pay (LWP) for future absences or contact HR.',
+                    style: TextStyle(
+                      color: Colors.orange.shade800,
+                      fontSize: 13,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
       ],
     );
   }
@@ -347,6 +378,10 @@ class _LeaveApplicationScreenState extends State<LeaveApplicationScreen>
           // Reset SL specific settings
           if (value != LeaveType.sick) {
             _isSingleDaySL = true; // Reset to default
+          }
+          // Reset OH specific settings
+          if (value != LeaveType.optionalHoliday) {
+            _selectedOptionalHolidayId = null; // Reset holiday selection
           }
           _updateCalculatedDays();
           _updatePolicyWarning();
@@ -401,6 +436,12 @@ class _LeaveApplicationScreenState extends State<LeaveApplicationScreen>
       return false;
     }
     
+    // Check for zero balance - block applications when balance is 0
+    final balance = _currentLeaveBalance[type.balanceKey] ?? 0;
+    if (balance <= 0) {
+      return false;
+    }
+    
     return true;
   }
 
@@ -423,10 +464,20 @@ class _LeaveApplicationScreenState extends State<LeaveApplicationScreen>
     if (_activeLeaveRestrictions[type] == true) {
       if (type == LeaveType.sick) {
         return 'SL not available: Either you have an active request or already used monthly quota (1 SL per month).';
+      } else if (type == LeaveType.casual) {
+        return 'CL not available: Either you have an active request or already used monthly quota (1 CL per month).';
+      } else if (type == LeaveType.paid) {
+        return 'PL not available: Either you have an active request or already used monthly quota (1 PL per month).';
       } else {
-        final leaveTypeName = type == LeaveType.casual ? 'CL' : 'Leave';
+        final leaveTypeName = type == LeaveType.paid ? 'PL' : 'Leave';
         return 'You have an active $leaveTypeName request. Cancel or wait for approval/rejection to apply again.';
       }
+    }
+    
+    // Check for zero balance
+    final balance = _currentLeaveBalance[type.balanceKey] ?? 0;
+    if (balance <= 0) {
+      return 'No ${type.displayName} balance available. Please use Leave Without Pay (LWP) for future absences.';
     }
     
     return '';
@@ -525,12 +576,18 @@ class _LeaveApplicationScreenState extends State<LeaveApplicationScreen>
         return OptionalHolidayWidget(
           user: widget.user,
           startDate: _startDate,
+          selectedOptionalHolidayId: _selectedOptionalHolidayId,
           onStartDateChanged: (date) {
             setState(() {
               _startDate = date;
               _endDate = date; // OH is always single day
               _updateCalculatedDays();
               _updatePolicyWarning();
+            });
+          },
+          onHolidaySelected: (holidayId) {
+            setState(() {
+              _selectedOptionalHolidayId = holidayId;
             });
           },
         );
@@ -718,11 +775,24 @@ class _LeaveApplicationScreenState extends State<LeaveApplicationScreen>
   }
 
   bool _canSubmit() {
+    // First check if selected leave type is eligible (not blocked by zero balance or other restrictions)
+    if (!_isLeaveTypeEligible(_selectedLeaveType)) {
+      return false;
+    }
+    
     bool hasValidDates = _startDate != null && _endDate != null;
     
-    // For optional holidays, reason is not required
+    // For optional holidays, reason is not required but holiday must be selected
     if (_selectedLeaveType == LeaveType.optionalHoliday) {
-      return !_isLoading && hasValidDates;
+      return !_isLoading && hasValidDates && _selectedOptionalHolidayId != null;
+    }
+    
+    // For PL, check minimum 2 days requirement
+    if (_selectedLeaveType == LeaveType.paid && hasValidDates) {
+      final totalDays = LeaveRequest.calculateLeaveDays(_startDate!, _endDate!);
+      if (totalDays < 2) {
+        return false; // PL requires minimum 2 days
+      }
     }
     
     // For other leave types, reason is required
@@ -808,6 +878,27 @@ class _LeaveApplicationScreenState extends State<LeaveApplicationScreen>
   }
 
   void _updateBalanceInfo() {
+    // Check if current selected leave type is still eligible
+    if (!_isLeaveTypeEligible(_selectedLeaveType)) {
+      // Find the first available leave type
+      LeaveType? availableType;
+      for (final type in LeaveType.values) {
+        if (_isLeaveTypeEligible(type)) {
+          availableType = type;
+          break;
+        }
+      }
+      
+      // Switch to the first available leave type if one exists
+      if (availableType != null) {
+        _selectedLeaveType = availableType;
+        // Reset form when switching leave type
+        _startDate = null;
+        _endDate = null;
+        _isSingleDaySL = true;
+      }
+    }
+    
     final balance = _currentLeaveBalance[_selectedLeaveType.balanceKey] ?? 0;
     setState(() {
       _balanceInfo = 'Available ${_selectedLeaveType.displayName}: $balance days';
@@ -830,6 +921,9 @@ class _LeaveApplicationScreenState extends State<LeaveApplicationScreen>
       
       // Reset sick leave to single day mode
       _isSingleDaySL = true;
+      
+      // Reset optional holiday selection
+      _selectedOptionalHolidayId = null;
       
       // Clear calculated info
       _calculatedDays = null;
@@ -942,13 +1036,19 @@ class _LeaveApplicationScreenState extends State<LeaveApplicationScreen>
     });
 
     try {
+      // Debug log for OH
+      if (_selectedLeaveType == LeaveType.optionalHoliday) {
+        print('🎯 Submitting OH with holidayId: $_selectedOptionalHolidayId');
+        print('🎯 Start date: $_startDate');
+      }
+      
       final result = await _leaveService.applyForLeave(
         leaveType: _selectedLeaveType,
         startDate: _startDate!,
         endDate: _endDate!,
         reason: _reasonController.text.trim(),
         user: widget.user,
-        selectedOptionalHolidayId: null,
+        selectedOptionalHolidayId: _selectedOptionalHolidayId,
       );
 
       if (result.success) {

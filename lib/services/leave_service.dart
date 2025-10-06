@@ -214,10 +214,24 @@ class LeaveService {
       
       if (result.data['success'] == true) {
         final List<dynamic> requestsData = result.data['requests'] ?? [];
+        
+        // Debug: Print each request data
+        for (int i = 0; i < requestsData.length; i++) {
+          final data = requestsData[i];
+          print('🔍 Request $i - ID: ${data['id']}, Top-level leaveType: ${data['leaveType']}, Nested leaveType: ${data['data']['leaveType']}');
+        }
+        
         return requestsData
-            .map((data) => LeaveRequest.fromMap(
-                Map<String, dynamic>.from(data['data']), 
-                data['id']))
+            .map((data) {
+              // Create a copy of the data with the corrected leaveType
+              final Map<String, dynamic> requestMap = Map<String, dynamic>.from(data['data']);
+              // Override with the corrected leaveType from the top level
+              requestMap['leaveType'] = data['leaveType'];
+              
+              print('🔧 Corrected leaveType for ${data['id']}: ${requestMap['leaveType']}');
+              
+              return LeaveRequest.fromMap(requestMap, data['id']);
+            })
             .toList();
       } else {
         throw Exception(result.data['message'] ?? 'Failed to fetch leave requests');
@@ -241,26 +255,59 @@ class LeaveService {
           (request.status == 'pending' || request.status == 'approved'));
           
       // Check for monthly SL usage (one SL per month rule)
+      // Only count SL that are not cancelled or rejected
       final currentMonth = DateTime.now().month;
       final currentYear = DateTime.now().year;
       bool hasMonthlySLUsed = leaveRequests.any((request) =>
           request.leaveType == LeaveType.sick &&
           request.startDate.month == currentMonth &&
-          request.startDate.year == currentYear);
+          request.startDate.year == currentYear &&
+          request.status != 'cancelled' &&
+          request.status != 'rejected');
           
       bool hasPendingOrApprovedCL = leaveRequests.any((request) =>
           request.leaveType == LeaveType.casual &&
           (request.status == 'pending' || request.status == 'approved'));
       
+      // Check for monthly CL usage (one CL per month rule)
+      // Only count CL that are not cancelled or rejected
+      bool hasMonthlyClUsed = leaveRequests.any((request) =>
+          request.leaveType == LeaveType.casual &&
+          request.startDate.month == currentMonth &&
+          request.startDate.year == currentYear &&
+          request.status != 'cancelled' &&
+          request.status != 'rejected');
+          
+      bool hasPendingOrApprovedPL = leaveRequests.any((request) =>
+          request.leaveType == LeaveType.paid &&
+          (request.status == 'pending' || request.status == 'approved'));
+      
+      // Check for monthly PL usage (one PL per month rule)
+      // Only count PL that are not cancelled or rejected
+      bool hasMonthlyPlUsed = leaveRequests.any((request) =>
+          request.leaveType == LeaveType.paid &&
+          request.startDate.month == currentMonth &&
+          request.startDate.year == currentYear &&
+          request.status != 'cancelled' &&
+          request.status != 'rejected');
+      
       // SL is blocked if there's either an active request OR monthly limit reached
       bool slBlocked = hasPendingOrApprovedSL || hasMonthlySLUsed;
       
-      print('🚫 LeaveService: SL pending/approved: $hasPendingOrApprovedSL, monthly used: $hasMonthlySLUsed, total blocked: $slBlocked, CL blocked: $hasPendingOrApprovedCL');
+      // CL is blocked if there's either an active request OR monthly limit reached
+      bool clBlocked = hasPendingOrApprovedCL || hasMonthlyClUsed;
+      
+      // PL is blocked if there's either an active request OR monthly limit reached
+      bool plBlocked = hasPendingOrApprovedPL || hasMonthlyPlUsed;
+      
+      print('🚫 LeaveService: SL pending/approved: $hasPendingOrApprovedSL, monthly used: $hasMonthlySLUsed, total blocked: $slBlocked');
+      print('🚫 LeaveService: CL pending/approved: $hasPendingOrApprovedCL, monthly used: $hasMonthlyClUsed, total blocked: $clBlocked');
+      print('🚫 LeaveService: PL pending/approved: $hasPendingOrApprovedPL, monthly used: $hasMonthlyPlUsed, total blocked: $plBlocked');
       
       return {
         LeaveType.sick: slBlocked,
-        LeaveType.casual: hasPendingOrApprovedCL,
-        LeaveType.paid: false, // PL is never blocked
+        LeaveType.casual: clBlocked,
+        LeaveType.paid: plBlocked, // PL is now blocked based on monthly usage
         LeaveType.optionalHoliday: false, // OH is never blocked
       };
     } catch (e) {
@@ -282,10 +329,10 @@ class LeaveService {
       
       final result = await _functions.httpsCallable('getOptionalHolidays').call();
       
-      print('✅ LeaveService: Function call successful');
-      print('� LeaveService: Raw result type: ${result.runtimeType}');
-      print('� LeaveService: Raw result data type: ${result.data.runtimeType}');
-      print('� LeaveService: Raw result: ${result.data}');
+      print('LeaveService: Function call successful');
+      print('LeaveService: Raw result type: ${result.runtimeType}');
+      print('LeaveService: Raw result data type: ${result.data.runtimeType}');
+      print('LeaveService: Raw result: ${result.data}');
       
       if (result.data != null && result.data is Map && result.data['holidays'] != null) {
         final holidaysList = result.data['holidays'] as List;
@@ -296,10 +343,14 @@ class LeaveService {
           final holidayMap = Map<String, dynamic>.from(holiday as Map);
           final holidayData = Map<String, dynamic>.from(holidayMap['data'] as Map);
           
+          // Debug log the holiday ID and date info
+          print('LeaveService: Processing holiday ID: ${holidayMap['id']}');
+          print('LeaveService: Raw date data: ${holidayData['date']}');
+          
           // Handle Firestore Timestamp or string date conversion
           DateTime holidayDate;
           if (holidayData['date'] is Map && holidayData['date']['_seconds'] != null) {
-            // Firestore Timestamp format
+            // Firestore Timestamp format - keep local timezone for display
             final dateMap = Map<String, dynamic>.from(holidayData['date'] as Map);
             final seconds = dateMap['_seconds'] as int;
             holidayDate = DateTime.fromMillisecondsSinceEpoch(seconds * 1000);
@@ -310,6 +361,8 @@ class LeaveService {
             // Fallback to current date
             holidayDate = DateTime.now();
           }
+          
+          print('LeaveService: Converted holiday date: ${holidayDate.toIso8601String()}');
           
           // Handle createdAt timestamp
           DateTime createdAt;

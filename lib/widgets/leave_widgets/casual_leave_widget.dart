@@ -65,25 +65,40 @@ class CasualLeaveWidget extends StatelessWidget {
                     border: Border.all(color: Colors.orange.shade200),
                     borderRadius: BorderRadius.circular(8),
                   ),
-                  child: const Column(
+                  child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Text(
-                        'Casual Leave Policy:',
-                        style: TextStyle(fontWeight: FontWeight.bold, color: Colors.orange),
+                      Row(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Icon(Icons.info_outline, 
+                               color: Colors.orange.shade700, size: 16),
+                          const SizedBox(width: 8),
+                          const Expanded(
+                            child: Text(
+                              'Casual Leave Policy:',
+                              style: TextStyle(
+                                fontWeight: FontWeight.bold,
+                                color: Colors.orange,
+                                fontSize: 12,
+                              ),
+                            ),
+                          ),
+                        ],
                       ),
-                      SizedBox(height: 4),
-                      Text(
-                        '• Only 1 CL per month is allowed',
-                        style: TextStyle(fontSize: 12, color: Colors.orange),
-                      ),
-                      Text(
-                        '• Available after 6 months of service',
-                        style: TextStyle(fontSize: 12, color: Colors.orange),
-                      ),
-                      Text(
-                        '• Extra days will be marked as absent',
-                        style: TextStyle(fontSize: 12, color: Colors.orange),
+                      const SizedBox(height: 4),
+                      const Text(
+                        '• Only 1 CL per month is allowed\n'
+                        '• Available after 6 months of service\n'
+                        '• Sundays cannot be selected (non-working day)\n'
+                        '• Start date: Today to next 2 weeks\n'
+                        '• End date: From start date to next 2 weeks\n'
+                        '• Extra days will be marked as absent\n'
+                        '• CL remains locked entire month after one use',
+                        style: TextStyle(
+                          fontSize: 11,
+                          color: Colors.orange,
+                        ),
                       ),
                     ],
                   ),
@@ -140,8 +155,12 @@ class CasualLeaveWidget extends StatelessWidget {
   }
 
   Future<void> _selectDate(BuildContext context, Function(DateTime) onDateSelected, DateTime? firstDate) async {
-    final DateTime calculatedFirstDate = firstDate ?? DateTime.now();
     final DateTime today = DateTime.now();
+    
+    // For start date: current date to next 2 weeks
+    // For end date: from selected start date to next 2 weeks
+    final DateTime calculatedFirstDate = firstDate ?? today;
+    final DateTime lastDate = (firstDate ?? today).add(const Duration(days: 14));
     
     // Ensure initialDate is not before firstDate
     final DateTime initialDate = calculatedFirstDate.isAfter(today) ? calculatedFirstDate : today;
@@ -150,7 +169,11 @@ class CasualLeaveWidget extends StatelessWidget {
       context: context,
       initialDate: initialDate,
       firstDate: calculatedFirstDate,
-      lastDate: DateTime.now().add(const Duration(days: 365)),
+      lastDate: lastDate,
+      selectableDayPredicate: (DateTime date) {
+        // Exclude Sundays (weekday 7 = Sunday)
+        return date.weekday != DateTime.sunday;
+      },
     );
     
     if (picked != null) {

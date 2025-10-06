@@ -49,17 +49,25 @@ extension LeaveTypeExtension on LeaveType {
   }
 
   static LeaveType fromString(String type) {
-    switch (type.toLowerCase()) {
+    final lowerType = type.toLowerCase();
+    print('🔍 LeaveTypeExtension.fromString: input="$type" → lowercase="$lowerType"');
+    
+    switch (lowerType) {
       case 'sick':
+        print('✅ Matched: sick');
         return LeaveType.sick;
       case 'casual':
+        print('✅ Matched: casual');
         return LeaveType.casual;
       case 'paid':
+        print('✅ Matched: paid');
         return LeaveType.paid;
       case 'optional':
-      case 'optionalHoliday':
+      case 'optionalholiday':  // Fixed: should be all lowercase since we use toLowerCase()
+        print('✅ Matched: optional/optionalholiday');
         return LeaveType.optionalHoliday;
       default:
+        print('❌ No match, defaulting to sick');
         return LeaveType.sick;
     }
   }
@@ -282,7 +290,12 @@ class LeaveRequest {
       empCode: map['empCode'] ?? '',
       employeeName: map['employeeName'] ?? '',
       employeeDepartment: map['employeeDepartment'] ?? map['department'] ?? '',
-      leaveType: LeaveTypeExtension.fromString(map['leaveType'] ?? 'sick'),
+      leaveType: (() {
+        final leaveTypeStr = map['leaveType'] ?? 'sick';
+        final parsedType = LeaveTypeExtension.fromString(leaveTypeStr);
+        print('🏷️ LeaveRequest.fromMap - leaveType string: "$leaveTypeStr" → parsed: $parsedType');
+        return parsedType;
+      })(),
       startDate: parseDate(map['startDate'], 'startDate'),
       endDate: parseDate(map['endDate'], 'endDate'),
       totalDays: map['totalDays'] ?? 0,
