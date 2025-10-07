@@ -193,7 +193,6 @@ class _OptionalHolidayWidgetState extends State<OptionalHolidayWidget> {
       padding: const EdgeInsets.only(bottom: 8),
       child: InkWell(
         onTap: isPastDate ? null : () {
-          print('OH Selected: ${holiday.id} -> ${holiday.date.toIso8601String()}');
           widget.onHolidaySelected(holiday.id);
           widget.onStartDateChanged(holiday.date);
         },
@@ -221,7 +220,6 @@ class _OptionalHolidayWidgetState extends State<OptionalHolidayWidget> {
                 value: holiday.id,
                 groupValue: widget.selectedOptionalHolidayId,
                 onChanged: isPastDate ? null : (value) {
-                  print('OH Radio Selected: $value -> ${holiday.date.toIso8601String()}');
                   widget.onHolidaySelected(value);
                   widget.onStartDateChanged(holiday.date);
                 },

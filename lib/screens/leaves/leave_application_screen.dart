@@ -1036,11 +1036,7 @@ class _LeaveApplicationScreenState extends State<LeaveApplicationScreen>
     });
 
     try {
-      // Debug log for OH
-      if (_selectedLeaveType == LeaveType.optionalHoliday) {
-        print('🎯 Submitting OH with holidayId: $_selectedOptionalHolidayId');
-        print('🎯 Start date: $_startDate');
-      }
+
       
       final result = await _leaveService.applyForLeave(
         leaveType: _selectedLeaveType,

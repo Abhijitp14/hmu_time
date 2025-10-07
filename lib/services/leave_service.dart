@@ -210,16 +210,8 @@ class LeaveService {
       final callable = _functions.httpsCallable('getMyLeaveRequests');
       final result = await callable.call();
       
-      print('📥 LeaveService: Received leave requests: ${result.data}');
-      
       if (result.data['success'] == true) {
         final List<dynamic> requestsData = result.data['requests'] ?? [];
-        
-        // Debug: Print each request data
-        for (int i = 0; i < requestsData.length; i++) {
-          final data = requestsData[i];
-          print('🔍 Request $i - ID: ${data['id']}, Top-level leaveType: ${data['leaveType']}, Nested leaveType: ${data['data']['leaveType']}');
-        }
         
         return requestsData
             .map((data) {
@@ -227,8 +219,6 @@ class LeaveService {
               final Map<String, dynamic> requestMap = Map<String, dynamic>.from(data['data']);
               // Override with the corrected leaveType from the top level
               requestMap['leaveType'] = data['leaveType'];
-              
-              print('🔧 Corrected leaveType for ${data['id']}: ${requestMap['leaveType']}');
               
               return LeaveRequest.fromMap(requestMap, data['id']);
             })

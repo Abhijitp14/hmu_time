@@ -2002,31 +2002,21 @@ async function handleOptionalHolidayApplication(data: any, context: any) {
   const holidayDate = selectedHoliday?.date;
   const requestStartDate = startDate;
   
-  functions.logger.info(`🗓️ Raw holiday date: ${JSON.stringify(holidayDate)}`);
-  functions.logger.info(`🗓️ Raw request start date: ${requestStartDate.toISOString()}`);
-  
-  // Properly handle Firestore Timestamp conversion with timezone consideration
+  // Handle Firestore Timestamp conversion
   let holidayDateObj: Date;
   if (holidayDate?.toDate) {
-    // It's a Firestore Timestamp
     holidayDateObj = holidayDate.toDate();
   } else if (holidayDate?._seconds) {
-    // It's a Firestore Timestamp object with _seconds
     holidayDateObj = new Date(holidayDate._seconds * 1000);
   } else {
-    // It's already a Date or date string
     holidayDateObj = new Date(holidayDate);
   }
   
-  functions.logger.info(`🗓️ Processed holiday date (UTC): ${holidayDateObj.toISOString()}`);
-  functions.logger.info(`🗓️ Processed holiday date (Local): ${holidayDateObj.toString()}`);
-  
-  // Handle timezone offset - the holiday date was set in IST but stored as UTC
-  // We need to add the IST offset (5.5 hours) to get the correct date
+  // Handle timezone offset - holiday dates are set in IST but stored as UTC
   const ISTOffset = 5.5 * 60 * 60 * 1000; // IST is UTC+5:30
   const holidayDateIST = new Date(holidayDateObj.getTime() + ISTOffset);
   
-  // Compare dates using the corrected timezone
+  // Compare dates using local time components
   const requestYear = requestStartDate.getFullYear();
   const requestMonth = requestStartDate.getMonth() + 1;
   const requestDay = requestStartDate.getDate();
@@ -2037,19 +2027,11 @@ async function handleOptionalHolidayApplication(data: any, context: any) {
   const holidayDay = holidayDateIST.getDate();
   const holidayDateStr = `${holidayYear}-${String(holidayMonth).padStart(2, '0')}-${String(holidayDay).padStart(2, '0')}`;
   
-  functions.logger.info(`🗓️ Request date: ${requestDateStr} (Y:${requestYear}, M:${requestMonth}, D:${requestDay})`);
-  functions.logger.info(`🗓️ Holiday date (UTC): ${holidayDateObj.toISOString()}`);
-  functions.logger.info(`🗓️ Holiday date (IST corrected): ${holidayDateIST.toISOString()}`);
-  functions.logger.info(`🗓️ Holiday date (final): ${holidayDateStr} (Y:${holidayYear}, M:${holidayMonth}, D:${holidayDay})`);
-  
-  const datesMatch = requestDateStr === holidayDateStr;
-  functions.logger.info(`🗓️ Dates match: ${datesMatch}`);
-  
-  if (!datesMatch) {
-    functions.logger.info(`❌ Date mismatch: Request=${requestDateStr}, Holiday=${holidayDateStr}`);
+  if (requestDateStr !== holidayDateStr) {
+    functions.logger.error(`Date mismatch: Request=${requestDateStr}, Holiday=${holidayDateStr}`);
     throw new functions.https.HttpsError(
       "invalid-argument",
-      `Leave date must match the selected optional holiday date. Request: ${requestDateStr}, Holiday: ${holidayDateStr}`
+      `Leave date must match the selected optional holiday date`
     );
   }
 
