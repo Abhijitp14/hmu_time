@@ -543,9 +543,17 @@ class OptionalHoliday {
     return '${date.day} ${months[date.month - 1]} ${date.year}';
   }
 
-  bool get isPastDate => date.isBefore(DateTime.now());
-  bool get isToday => 
-    date.year == DateTime.now().year &&
-    date.month == DateTime.now().month &&
-    date.day == DateTime.now().day;
+  bool get isPastDate {
+    final today = DateTime.now();
+    final todayDateOnly = DateTime(today.year, today.month, today.day);
+    final holidayDateOnly = DateTime(date.year, date.month, date.day);
+    return holidayDateOnly.isBefore(todayDateOnly);
+  }
+  
+  bool get isToday {
+    final today = DateTime.now();
+    return date.year == today.year &&
+           date.month == today.month &&
+           date.day == today.day;
+  }
 }

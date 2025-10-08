@@ -315,35 +315,31 @@ class LeaveService {
   /// Get available optional holidays
   Future<List<OptionalHoliday>> getAvailableOptionalHolidays() async {
     try {
-      print('📞 LeaveService: Calling getOptionalHolidays function...');
-      
       final result = await _functions.httpsCallable('getOptionalHolidays').call();
-      
-      print('LeaveService: Function call successful');
-      print('LeaveService: Raw result type: ${result.runtimeType}');
-      print('LeaveService: Raw result data type: ${result.data.runtimeType}');
-      print('LeaveService: Raw result: ${result.data}');
       
       if (result.data != null && result.data is Map && result.data['holidays'] != null) {
         final holidaysList = result.data['holidays'] as List;
-        print('🏖️ LeaveService: Found ${holidaysList.length} optional holidays');
-        
         // Convert the holidays to OptionalHoliday objects
         return holidaysList.map<OptionalHoliday>((holiday) {
           final holidayMap = Map<String, dynamic>.from(holiday as Map);
           final holidayData = Map<String, dynamic>.from(holidayMap['data'] as Map);
           
-          // Debug log the holiday ID and date info
-          print('LeaveService: Processing holiday ID: ${holidayMap['id']}');
-          print('LeaveService: Raw date data: ${holidayData['date']}');
-          
           // Handle Firestore Timestamp or string date conversion
           DateTime holidayDate;
           if (holidayData['date'] is Map && holidayData['date']['_seconds'] != null) {
-            // Firestore Timestamp format - keep local timezone for display
+            // Firestore Timestamp format - handle IST timezone properly
             final dateMap = Map<String, dynamic>.from(holidayData['date'] as Map);
             final seconds = dateMap['_seconds'] as int;
-            holidayDate = DateTime.fromMillisecondsSinceEpoch(seconds * 1000);
+            final nanoseconds = dateMap['_nanoseconds'] as int? ?? 0;
+            
+            // Create datetime from timestamp and ensure it's treated as IST date
+            final utcDateTime = DateTime.fromMillisecondsSinceEpoch(
+              seconds * 1000 + (nanoseconds / 1000000).round(),
+              isUtc: true
+            );
+            
+            // Add IST offset (5.5 hours) to get the correct local date
+            holidayDate = utcDateTime.add(Duration(hours: 5, minutes: 30));
           } else if (holidayData['date'] is String) {
             // ISO string format
             holidayDate = DateTime.parse(holidayData['date']);
@@ -351,8 +347,6 @@ class LeaveService {
             // Fallback to current date
             holidayDate = DateTime.now();
           }
-          
-          print('LeaveService: Converted holiday date: ${holidayDate.toIso8601String()}');
           
           // Handle createdAt timestamp
           DateTime createdAt;
@@ -364,15 +358,17 @@ class LeaveService {
             createdAt = DateTime.now();
           }
           
-          return OptionalHoliday(
-            id: holidayMap['id'] as String,
-            name: holidayData['name'] as String,
-            description: holidayData['description'] as String? ?? '',
-            date: holidayDate,
-            isActive: true,
-            createdAt: createdAt,
-            createdBy: 'admin', // Default value, could be enhanced later
-          );
+          // Create a proper map for OptionalHoliday.fromMap
+          final holidayMapForParsing = {
+            'name': holidayData['name'] as String,
+            'description': holidayData['description'] as String? ?? '',
+            'date': holidayDate.toIso8601String(),
+            'isActive': true,
+            'createdAt': createdAt.toIso8601String(),
+            'createdBy': 'admin',
+          };
+          
+          return OptionalHoliday.fromMap(holidayMapForParsing, holidayMap['id'] as String);
         }).where((holiday) {
           // Only show upcoming holidays (today and future dates)
           final today = DateTime.now();
@@ -382,12 +378,10 @@ class LeaveService {
         }).toList();
       } else {
         print('⚠️ LeaveService: No holidays found in response or wrong format');
-        print('📊 LeaveService: Available keys: ${result.data is Map ? (result.data as Map).keys.toList() : 'N/A'}');
         return [];
       }
-    } catch (e, stackTrace) {
+    } catch (e) {
       print('❌ LeaveService: Error fetching optional holidays: $e');
-      print('📍 LeaveService: Stack trace: $stackTrace');
       return [];
     }
   }
