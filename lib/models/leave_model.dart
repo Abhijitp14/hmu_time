@@ -6,6 +6,8 @@ enum LeaveType {
   casual,
   paid,
   optionalHoliday,
+  lwp,
+  officialLeave,
 }
 
 extension LeaveTypeExtension on LeaveType {
@@ -19,6 +21,10 @@ extension LeaveTypeExtension on LeaveType {
         return 'Paid Leave';
       case LeaveType.optionalHoliday:
         return 'Optional Holiday';
+      case LeaveType.lwp:
+        return 'Leave Without Pay';
+      case LeaveType.officialLeave:
+        return 'Official Leave';
     }
   }
 
@@ -32,6 +38,10 @@ extension LeaveTypeExtension on LeaveType {
         return 'PL';
       case LeaveType.optionalHoliday:
         return 'OH';
+      case LeaveType.lwp:
+        return 'LWP';
+      case LeaveType.officialLeave:
+        return 'OL';
     }
   }
 
@@ -45,6 +55,10 @@ extension LeaveTypeExtension on LeaveType {
         return 'paid';
       case LeaveType.optionalHoliday:
         return 'optionalHoliday';
+      case LeaveType.lwp:
+        return 'lwp';
+      case LeaveType.officialLeave:
+        return 'officialLeave';
     }
   }
 
@@ -59,6 +73,10 @@ extension LeaveTypeExtension on LeaveType {
       case 'optional':
       case 'optionalholiday':
         return LeaveType.optionalHoliday;
+      case 'lwp':
+        return LeaveType.lwp;
+      case 'officialleave':
+        return LeaveType.officialLeave;
       default:
         return LeaveType.sick;
     }
@@ -75,6 +93,10 @@ extension LeaveTypeExtension on LeaveType {
         return 'paidLeave';
       case LeaveType.optionalHoliday:
         return 'optionalHoliday';
+      case LeaveType.lwp:
+        return 'lwp'; // LWP doesn't have balance tracking
+      case LeaveType.officialLeave:
+        return 'officialLeave'; // Official Leave doesn't have balance tracking
     }
   }
 }
@@ -208,6 +230,14 @@ class LeaveRequest {
         // This is because only one sick leave per month is allowed
         // Other days will be automatically marked as absent
         return totalDays > 0 ? 1 : 0;
+      
+      case LeaveType.lwp:
+        // For LWP: No deduction from balance as it's unlimited
+        return 0;
+      
+      case LeaveType.officialLeave:
+        // For Official Leave: No deduction from balance as it's unlimited
+        return 0;
       
       case LeaveType.casual:
       case LeaveType.paid:

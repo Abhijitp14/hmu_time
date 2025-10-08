@@ -78,13 +78,40 @@ class EmployeeService {
       
       if (result.data['success']) {
         final List<dynamic> employeesList = result.data['employees'];
-        return employeesList.map((e) => Map<String, dynamic>.from(e)).toList();
+        return employeesList.map((e) {
+          // Safe conversion handling nested objects
+          return _deepConvertMap(e);
+        }).toList();
       } else {
         throw Exception(result.data['message'] ?? 'Failed to fetch employees');
       }
     } catch (e) {
       print('Error fetching employees: $e');
       throw Exception('Failed to fetch employees: $e');
+    }
+  }
+
+  /// Recursively convert nested objects to proper Map<String, dynamic>
+  Map<String, dynamic> _deepConvertMap(dynamic data) {
+    if (data is Map) {
+      return Map<String, dynamic>.fromEntries(
+        data.entries.map((entry) => MapEntry(
+          entry.key.toString(),
+          _deepConvertValue(entry.value),
+        )),
+      );
+    }
+    throw ArgumentError('Expected Map but got ${data.runtimeType}');
+  }
+
+  /// Recursively convert values handling different types
+  dynamic _deepConvertValue(dynamic value) {
+    if (value is Map) {
+      return _deepConvertMap(value);
+    } else if (value is List) {
+      return value.map(_deepConvertValue).toList();
+    } else {
+      return value;
     }
   }
 
@@ -96,7 +123,7 @@ class EmployeeService {
       
       if (result.data['success']) {
         final List<dynamic> teammatesList = result.data['employees'];
-        return teammatesList.map((e) => Map<String, dynamic>.from(e)).toList();
+        return teammatesList.map((e) => _deepConvertMap(e)).toList();
       } else {
         throw Exception(result.data['message'] ?? 'Failed to fetch teammates');
       }
@@ -113,7 +140,7 @@ class EmployeeService {
       
       if (result.data['success']) {
         final List<dynamic> adminUsersList = result.data['adminUsers'];
-        return adminUsersList.map((e) => Map<String, dynamic>.from(e)).toList();
+        return adminUsersList.map((e) => _deepConvertMap(e)).toList();
       } else {
         throw Exception(result.data['message'] ?? 'Failed to fetch admin users');
       }

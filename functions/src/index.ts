@@ -2074,6 +2074,92 @@ async function handleOptionalHolidayApplication(data: any, context: any) {
 }
 
 /**
+ * Handle Leave Without Pay (LWP) Application
+ */
+async function handleLwpLeaveApplication(data: any, context: any) {
+  const leaveContext = await getLeaveApplicationContext(data, context);
+  const { userData, empCode, startDate, endDate, totalDays } = leaveContext;
+  const { reason } = data;
+
+  // LWP requires reason
+  if (!reason) {
+    throw new functions.https.HttpsError(
+      "invalid-argument",
+      "Reason is required for Leave Without Pay"
+    );
+  }
+
+  // LWP has no balance check - it's unlimited
+  // No monthly limits or restrictions - employees can apply multiple times
+  // LWP deducts full duration from pay but no balance tracking needed
+  const finalDeductionAmount = 0; // No leave balance deduction for LWP
+
+  // Calculate deduction dates (for payroll purposes, but not for balance)
+  const deductionDates: admin.firestore.Timestamp[] = [];
+  let currentDate = new Date(startDate);
+  while (currentDate <= endDate) {
+    deductionDates.push(admin.firestore.Timestamp.fromDate(new Date(currentDate)));
+    currentDate.setDate(currentDate.getDate() + 1);
+  }
+
+  functions.logger.info(`LWP Application: ${totalDays} day(s) on dates:`, deductionDates.map(d => d.toDate()));
+
+  // LWP is auto-approved like SL
+  return {
+    status: 'approved',
+    finalDeductionAmount,
+    deductionDates,
+    balanceKey: 'lwp', // This key exists but won't be used for balance deduction
+    approvalInfo: {
+      approvedAt: admin.firestore.FieldValue.serverTimestamp(),
+      approvedBy: 'system',
+      approvalNote: 'Leave without pay auto-approved as per company policy'
+    }
+  };
+}
+
+/**
+ * Handle Official Leave Application
+ */
+async function handleOfficialLeaveApplication(data: any, context: any) {
+  const leaveContext = await getLeaveApplicationContext(data, context);
+  const { userData, empCode, startDate, endDate, totalDays } = leaveContext;
+  const { reason } = data;
+
+  // Official Leave requires reason
+  if (!reason) {
+    throw new functions.https.HttpsError(
+      "invalid-argument",
+      "Reason is required for Official Leave"
+    );
+  }
+
+  // Official Leave has no balance check - it's unlimited like LWP
+  // No monthly limits or restrictions - employees can apply multiple times
+  // Official Leave doesn't deduct from balance as it's for official work
+  const finalDeductionAmount = 0; // No leave balance deduction for Official Leave
+
+  // Calculate deduction dates (for record purposes only)
+  const deductionDates: admin.firestore.Timestamp[] = [];
+  let currentDate = new Date(startDate);
+  while (currentDate <= endDate) {
+    deductionDates.push(admin.firestore.Timestamp.fromDate(new Date(currentDate)));
+    currentDate.setDate(currentDate.getDate() + 1);
+  }
+
+  functions.logger.info(`Official Leave Application: ${totalDays} day(s) on dates:`, deductionDates.map(d => d.toDate()));
+
+  // Official Leave requires manager approval (unlike LWP which is auto-approved)
+  return {
+    status: 'pending',
+    finalDeductionAmount,
+    deductionDates,
+    balanceKey: 'officialLeave', // Balance key for consistency but won't be used for deduction
+    approvalInfo: null // No approval info yet - pending manager approval
+  };
+}
+
+/**
  * Main Apply for Leave Function - Routes to appropriate handler
  */
 export const applyForLeave = functions.https.onCall(
@@ -2097,6 +2183,12 @@ export const applyForLeave = functions.https.onCall(
           break;
         case 'optionalHoliday':
           leaveResult = await handleOptionalHolidayApplication(data, context);
+          break;
+        case 'lwp':
+          leaveResult = await handleLwpLeaveApplication(data, context);
+          break;
+        case 'officialLeave':
+          leaveResult = await handleOfficialLeaveApplication(data, context);
           break;
         default:
           throw new functions.https.HttpsError(
@@ -2134,7 +2226,9 @@ export const applyForLeave = functions.https.onCall(
       // New Collection Structure: leaveRequests > empCode > LeaveType > leavedetails
       const leaveTypeCollection = leaveType === 'sick' ? 'SL' : 
                                 leaveType === 'casual' ? 'CL' : 
-                                leaveType === 'paid' ? 'PL' : 'OH';
+                                leaveType === 'paid' ? 'PL' : 
+                                leaveType === 'lwp' ? 'LWP' : 
+                                leaveType === 'officialLeave' ? 'OL' : 'OH';
       
       // Add to new structured leave requests collection
       const leaveRequestRef = await admin.firestore()
@@ -2231,7 +2325,7 @@ export const getMyLeaveRequests = functions.https.onCall(
 
       // Get leave requests from new structure: leaveRequests > empCode > LeaveType > documents
       const requests: any[] = [];
-      const leaveTypes = ['SL', 'CL', 'PL', 'OH'];
+      const leaveTypes = ['SL', 'CL', 'PL', 'OH', 'LWP', 'OL'];
 
       for (const leaveType of leaveTypes) {
         const leaveTypeSnapshot = await admin.firestore()
@@ -2244,28 +2338,9 @@ export const getMyLeaveRequests = functions.https.onCall(
         leaveTypeSnapshot.forEach(doc => {
           const requestData = doc.data();
           
-          // Map collection name back to proper leave type value
-          let leaveTypeValue = '';
-          switch (leaveType) {
-            case 'SL':
-              leaveTypeValue = 'sick';
-              break;
-            case 'CL':
-              leaveTypeValue = 'casual';
-              break;
-            case 'PL':
-              leaveTypeValue = 'paid';
-              break;
-            case 'OH':
-              leaveTypeValue = 'optionalHoliday';
-              break;
-            default:
-              leaveTypeValue = 'sick'; // fallback
-          }
-          
           requests.push({
             id: doc.id,
-            leaveType: leaveTypeValue,
+            leaveType: mapCollectionNameToLeaveType(leaveType),
             data: requestData
           });
         });
@@ -2532,6 +2607,50 @@ export const cancelLeaveRequest = functions.https.onCall(
   }
 );
 
+/**
+ * Helper function to map collection names to proper leave type values
+ */
+function mapCollectionNameToLeaveType(collectionName: string): string {
+  switch (collectionName) {
+    case 'SL':
+      return 'sick';
+    case 'CL':
+      return 'casual';
+    case 'PL':
+      return 'paid';
+    case 'OH':
+      return 'optionalHoliday';
+    case 'LWP':
+      return 'lwp';
+    case 'OL':
+      return 'officialLeave';
+    default:
+      return 'sick'; // fallback
+  }
+}
+
+/**
+ * Helper function to map leave type values to collection names
+ */
+function mapLeaveTypeToCollectionName(leaveType: string): string {
+  switch (leaveType) {
+    case 'sick':
+      return 'SL';
+    case 'casual':
+      return 'CL';
+    case 'paid':
+      return 'PL';
+    case 'optionalHoliday':
+      return 'OH';
+    case 'lwp':
+      return 'LWP';
+    case 'officialLeave':
+      return 'OL';
+    default:
+      return 'SL'; // fallback
+  }
+}
+
 // Cloud Function: Get All Employee Leave Requests for Admin/HR/Manager
 export const getAllEmployeeLeaveRequests = functions.https.onCall(
   async (data, context) => {
@@ -2616,8 +2735,8 @@ export const getAllEmployeeLeaveRequests = functions.https.onCall(
       // Iterate through all employees
       for (const empCode of employeeCodesToCheck) {
         try {
-          // Get all subcollections (SL, CL, PL, OH) for this employee
-          const leaveTypesToCheck = leaveType ? [leaveType] : ['SL', 'CL', 'PL', 'OH'];
+          // Get all subcollections (SL, CL, PL, OH, LWP, OL) for this employee
+          const leaveTypesToCheck = leaveType ? [leaveType] : ['SL', 'CL', 'PL', 'OH', 'LWP', 'OL'];
           functions.logger.info(`Checking leave types ${leaveTypesToCheck.join(', ')} for employee ${empCode}`);
           
           for (const ltType of leaveTypesToCheck) {
@@ -2632,6 +2751,7 @@ export const getAllEmployeeLeaveRequests = functions.https.onCall(
               if (status) {
                 query = query.where('status', '==', status);
               }
+              // Note: We'll filter out cancelled leaves in the processing loop instead of using !=
 
               const leaveTypeSnapshot = await query.limit(50).get(); // Limit per employee per leave type
               functions.logger.info(`Found ${leaveTypeSnapshot.docs.length} ${ltType} requests for employee ${empCode}`);
@@ -2639,6 +2759,11 @@ export const getAllEmployeeLeaveRequests = functions.https.onCall(
               leaveTypeSnapshot.docs.forEach(doc => {
                 const leaveData = doc.data();
                 const employeeInfo = employeeProfiles[empCode];
+
+                // Skip cancelled leaves unless specifically requested
+                if (!status && leaveData.status === 'cancelled') {
+                  return; // Skip this record
+                }
 
                 // Convert Firestore timestamps to ISO strings
                 const convertTimestamp = (timestamp: any) => {
@@ -2668,7 +2793,7 @@ export const getAllEmployeeLeaveRequests = functions.https.onCall(
                   employeeEmail: employeeInfo?.email || '',
                   department: employeeInfo?.department || 'N/A',
                   designation: employeeInfo?.designation || 'N/A',
-                  leaveType: ltType,
+                  leaveType: mapCollectionNameToLeaveType(ltType),
                   status: leaveData.status || 'pending',
                   reason: leaveData.reason || '',
                   startDate: convertTimestamp(leaveData.startDate),
@@ -2778,11 +2903,14 @@ export const approveLeaveRequest = functions.https.onCall(
 
       functions.logger.info(`Approving leave request: ${requestId} for employee: ${empCode}, type: ${leaveType}`);
 
+      // Map leave type value to collection name
+      const collectionName = mapLeaveTypeToCollectionName(leaveType);
+
       // Get the leave request
       const leaveRequestRef = admin.firestore()
         .collection('leaveRequests')
         .doc(empCode)
-        .collection(leaveType)
+        .collection(collectionName)
         .doc(requestId);
 
       const leaveRequestDoc = await leaveRequestRef.get();
@@ -2908,11 +3036,14 @@ export const rejectLeaveRequest = functions.https.onCall(
 
       functions.logger.info(`Rejecting leave request: ${requestId} for employee: ${empCode}, type: ${leaveType}`);
 
+      // Map leave type value to collection name
+      const collectionName = mapLeaveTypeToCollectionName(leaveType);
+
       // Get the leave request
       const leaveRequestRef = admin.firestore()
         .collection('leaveRequests')
         .doc(empCode)
-        .collection(leaveType)
+        .collection(collectionName)
         .doc(requestId);
 
       const leaveRequestDoc = await leaveRequestRef.get();
@@ -3097,11 +3228,14 @@ export const updateLeaveStatus = functions.https.onCall(
 
       functions.logger.info(`Manual leave status update: ${requestId} for employee: ${empCode}, type: ${leaveType}`);
 
+      // Map leave type value to collection name
+      const collectionName = mapLeaveTypeToCollectionName(leaveType);
+
       // Get the leave request
       const leaveRequestRef = admin.firestore()
         .collection('leaveRequests')
         .doc(empCode)
-        .collection(leaveType)
+        .collection(collectionName)
         .doc(requestId);
 
       const leaveRequestDoc = await leaveRequestRef.get();

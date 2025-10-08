@@ -299,6 +299,7 @@ class LeaveService {
         LeaveType.casual: clBlocked,
         LeaveType.paid: plBlocked, // PL is now blocked based on monthly usage
         LeaveType.optionalHoliday: false, // OH is never blocked
+        LeaveType.lwp: false, // LWP is never blocked
       };
     } catch (e) {
       print('❌ LeaveService: Error checking active restrictions: $e');
@@ -308,6 +309,7 @@ class LeaveService {
         LeaveType.casual: false,
         LeaveType.paid: false,
         LeaveType.optionalHoliday: false,
+        LeaveType.lwp: false,
       };
     }
   }
@@ -431,6 +433,10 @@ class LeaveService {
         return await _validatePaidLeave(startDate, endDate, user);
       case LeaveType.optionalHoliday:
         return await _validateOptionalHoliday(startDate, endDate, user, selectedOptionalHolidayId);
+      case LeaveType.lwp:
+        return await _validateLwpLeave(startDate, endDate, user);
+      case LeaveType.officialLeave:
+        return await _validateOfficialLeave(startDate, endDate, user);
     }
   }
 
@@ -673,6 +679,86 @@ class LeaveService {
     // This will be implemented in the Firebase function
     
     return LeaveValidationResult(isValid: true);
+  }
+
+  /// Validate Leave Without Pay (LWP) application
+  Future<LeaveValidationResult> _validateLwpLeave(DateTime startDate, DateTime endDate, AppUser user) async {
+    print('💰 LeaveService: Validating Leave Without Pay...');
+    
+    // Basic date validation
+    if (!LeaveRequest.isValidDateRange(startDate, endDate)) {
+      return LeaveValidationResult(
+        isValid: false,
+        errorMessage: 'Cannot apply for leave in the past',
+      );
+    }
+
+    if (startDate.isAfter(endDate)) {
+      return LeaveValidationResult(
+        isValid: false,
+        errorMessage: 'Start date cannot be after end date',
+      );
+    }
+
+    // Calculate leave days
+    final totalDays = LeaveRequest.calculateLeaveDays(startDate, endDate);
+    if (totalDays == 0) {
+      return LeaveValidationResult(
+        isValid: false,
+        errorMessage: 'Leave request must be for at least one working day',
+      );
+    }
+
+    // LWP has no balance restrictions - it's unlimited
+    // No service period requirements - can be used from day one
+    // No monthly limits - employees can apply multiple times
+    // LWP is always valid as long as basic validations pass
+    
+    return LeaveValidationResult(
+      isValid: true,
+      warningMessage: 'This is Leave Without Pay - no salary will be paid for the requested period.',
+    );
+  }
+
+  /// Validate Official Leave application
+  Future<LeaveValidationResult> _validateOfficialLeave(DateTime startDate, DateTime endDate, AppUser user) async {
+    print('🏢 LeaveService: Validating Official Leave...');
+    
+    // Basic date validation
+    if (!LeaveRequest.isValidDateRange(startDate, endDate)) {
+      return LeaveValidationResult(
+        isValid: false,
+        errorMessage: 'Cannot apply for leave in the past',
+      );
+    }
+
+    if (startDate.isAfter(endDate)) {
+      return LeaveValidationResult(
+        isValid: false,
+        errorMessage: 'Start date cannot be after end date',
+      );
+    }
+
+    // Calculate leave days
+    final totalDays = LeaveRequest.calculateLeaveDays(startDate, endDate);
+    if (totalDays == 0) {
+      return LeaveValidationResult(
+        isValid: false,
+        errorMessage: 'Leave request must be for at least one working day',
+      );
+    }
+
+    // Official Leave characteristics:
+    // - No balance restrictions - it's unlimited like LWP
+    // - No service period requirements - can be used from day one  
+    // - No monthly limits - employees can apply multiple times
+    // - Requires approval (unlike LWP which is auto-approved)
+    // - For office work outside office premises
+    
+    return LeaveValidationResult(
+      isValid: true,
+      warningMessage: 'This leave is for official work outside office premises and requires manager approval.',
+    );
   }
 
   /// Common helper method for service period calculation
@@ -930,6 +1016,8 @@ class AdminLeaveRequest {
         return 'Paid Leave';
       case 'OH':
         return 'Optional Holiday';
+      case 'LWP':
+        return 'Leave Without Pay';
       default:
         return leaveType;
     }

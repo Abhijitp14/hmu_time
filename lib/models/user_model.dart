@@ -197,12 +197,17 @@ class AppUser {
       employmentType: json['employmentType'],
       workingHours: json['workingHours']?.toDouble(),
       leaveBalance: json['leaveBalance'] != null 
-        ? Map<String, int>.from(json['leaveBalance']) 
+        ? Map<String, int>.from(
+            (json['leaveBalance'] as Map<String, dynamic>).map(
+              (key, value) => MapEntry(key, (value is double) ? value.round() : value as int)
+            )
+          )
         : {
             'sickLeave': json['sickLeave'] ?? 6,
             'casualLeave': json['casualLeave'] ?? 6,
             'paidLeave': json['paidLeave'] ?? 6, // Handle legacy data
             'optionalHoliday': json['optionalHoliday'] ?? json['optionalLeave'] ?? 3, // Handle legacy data
+            'lwp': 0, // LWP has no balance limit
           },
     );
   }

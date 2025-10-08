@@ -10,6 +10,8 @@ import '../../widgets/leave_widgets/sick_leave_widget.dart';
 import '../../widgets/leave_widgets/casual_leave_widget.dart';
 import '../../widgets/leave_widgets/paid_leave_widget.dart';
 import '../../widgets/leave_widgets/optional_holiday_widget.dart';
+import '../../widgets/leave_widgets/official_leave_widget.dart';
+import '../../widgets/leave_widgets/lwp_widget.dart';
 import 'edit_leave_request_screen.dart';
 
 class LeaveApplicationScreen extends StatefulWidget {
@@ -102,6 +104,8 @@ class _LeaveApplicationScreenState extends State<LeaveApplicationScreen>
             LeaveType.casual: false,
             LeaveType.paid: false,
             LeaveType.optionalHoliday: false,
+            LeaveType.lwp: false,
+            LeaveType.officialLeave: false,
           };
         });
       }
@@ -431,6 +435,11 @@ class _LeaveApplicationScreenState extends State<LeaveApplicationScreen>
       return false;
     }
     
+    // LWP and Official Leave are always available regardless of balance or restrictions
+    if (type == LeaveType.lwp || type == LeaveType.officialLeave) {
+      return true;
+    }
+    
     // Check for active leave restrictions (SL/CL blocked by pending/approved requests)
     if (_activeLeaveRestrictions[type] == true) {
       return false;
@@ -588,6 +597,78 @@ class _LeaveApplicationScreenState extends State<LeaveApplicationScreen>
           onHolidaySelected: (holidayId) {
             setState(() {
               _selectedOptionalHolidayId = holidayId;
+            });
+          },
+        );
+      case LeaveType.lwp:
+        return LwpWidget(
+          user: widget.user,
+          startDate: _startDate,
+          endDate: _endDate,
+          isSingleDay: _isSingleDaySL,
+          onSingleDayChanged: (value) {
+            setState(() {
+              _isSingleDaySL = value;
+              if (_isSingleDaySL) {
+                _endDate = _startDate;
+              } else {
+                _endDate = null;
+              }
+              _updateCalculatedDays();
+              _updatePolicyWarning();
+            });
+          },
+          onStartDateChanged: (date) {
+            setState(() {
+              _startDate = date;
+              if (_isSingleDaySL || (_endDate != null && _endDate!.isBefore(date))) {
+                _endDate = _isSingleDaySL ? date : null;
+              }
+              _updateCalculatedDays();
+              _updatePolicyWarning();
+            });
+          },
+          onEndDateChanged: (date) {
+            setState(() {
+              _endDate = date;
+              _updateCalculatedDays();
+              _updatePolicyWarning();
+            });
+          },
+        );
+      case LeaveType.officialLeave:
+        return OfficialLeaveWidget(
+          user: widget.user,
+          startDate: _startDate,
+          endDate: _endDate,
+          isSingleDay: _isSingleDaySL,
+          onSingleDayChanged: (value) {
+            setState(() {
+              _isSingleDaySL = value;
+              if (_isSingleDaySL) {
+                _endDate = _startDate;
+              } else {
+                _endDate = null;
+              }
+              _updateCalculatedDays();
+              _updatePolicyWarning();
+            });
+          },
+          onStartDateChanged: (date) {
+            setState(() {
+              _startDate = date;
+              if (_isSingleDaySL || (_endDate != null && _endDate!.isBefore(date))) {
+                _endDate = _isSingleDaySL ? date : null;
+              }
+              _updateCalculatedDays();
+              _updatePolicyWarning();
+            });
+          },
+          onEndDateChanged: (date) {
+            setState(() {
+              _endDate = date;
+              _updateCalculatedDays();
+              _updatePolicyWarning();
             });
           },
         );
@@ -850,6 +931,10 @@ class _LeaveApplicationScreenState extends State<LeaveApplicationScreen>
         calculatedInfo = 'Total Leave Days: $days';
         balanceInfo = 'Remaining Optional Holiday: ${balance - actualDeduction} days';
         policyWarning = 'Optional Holiday Policy: Auto-approved for predefined holidays only.';
+      } else if (_selectedLeaveType == LeaveType.lwp) {
+        calculatedInfo = 'Total Leave Days: $days';
+        balanceInfo = 'Leave Without Pay: No balance deduction (Unlimited usage)';
+        policyWarning = 'LWP Policy: Auto-approved. No salary will be paid for this period.';
       } else {
         calculatedInfo = 'Total Leave Days: $days';
         balanceInfo = 'Remaining ${_selectedLeaveType.displayName}: ${balance - actualDeduction} days';
@@ -1556,6 +1641,12 @@ class _LeaveApplicationScreenState extends State<LeaveApplicationScreen>
         
         // Allow modification until the end of the holiday day (not just before it starts)
         return todayStart.isAtSameMomentAs(leaveStartDate) || todayStart.isBefore(leaveStartDate);
+      } else if (leave.leaveType == LeaveType.lwp) {
+        // For LWP: Allow cancel until the leave start date ends (first day for single day, or start date for multiple days)
+        final DateTime leaveStartDate = DateTime(leave.startDate.year, leave.startDate.month, leave.startDate.day);
+        
+        // Allow modification until the end of the start day (not just before it starts)
+        return todayStart.isAtSameMomentAs(leaveStartDate) || todayStart.isBefore(leaveStartDate);
       } else {
         // For other leave types (CL, PL): only allow before start date
         final DateTime leaveStartDate = DateTime(leave.startDate.year, leave.startDate.month, leave.startDate.day);
@@ -1604,6 +1695,10 @@ class _LeaveApplicationScreenState extends State<LeaveApplicationScreen>
         return Colors.green;
       case LeaveType.optionalHoliday:
         return Colors.purple;
+      case LeaveType.lwp:
+        return Colors.orange;
+      case LeaveType.officialLeave:
+        return Colors.teal;
     }
   }
 
@@ -1675,6 +1770,12 @@ class _LeaveApplicationScreenState extends State<LeaveApplicationScreen>
             break;
           case LeaveType.optionalHoliday:
             leaveTypeKey = 'OH';
+            break;
+          case LeaveType.lwp:
+            leaveTypeKey = 'LWP';
+            break;
+          case LeaveType.officialLeave:
+            leaveTypeKey = 'OL';
             break;
         }
 
