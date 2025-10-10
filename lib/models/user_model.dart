@@ -68,6 +68,7 @@ class AppUser {
   final String? employmentType; // Full Time, Part Time, Consultant
   final double? workingHours; // Working hours per day
   final Map<String, int> leaveBalance;
+  final String? fcmToken;  // Add this field
 
   AppUser({
     required this.id,
@@ -87,6 +88,7 @@ class AppUser {
     this.employmentType,
     this.workingHours,
     Map<String, int>? leaveBalance,
+    this.fcmToken,  // Add this parameter
   }) : leaveBalance = leaveBalance ?? {
     'sickLeave': 6,
     'casualLeave': 6,
@@ -113,6 +115,7 @@ class AppUser {
       'employmentType': employmentType,
       'workingHours': workingHours,
       'leaveBalance': leaveBalance,
+      'fcmToken': fcmToken,  // Add this line
     };
   }
 
@@ -209,6 +212,7 @@ class AppUser {
             'optionalHoliday': json['optionalHoliday'] ?? json['optionalLeave'] ?? 3, // Handle legacy data
             'lwp': 0, // LWP has no balance limit
           },
+      fcmToken: json['fcmToken'],  // Add this line
     );
   }
 
@@ -230,6 +234,7 @@ class AppUser {
     String? employmentType,
     double? workingHours,
     Map<String, int>? leaveBalance,
+    String? fcmToken,  // Add this parameter
   }) {
     return AppUser(
       id: id ?? this.id,
@@ -249,6 +254,7 @@ class AppUser {
       employmentType: employmentType ?? this.employmentType,
       workingHours: workingHours ?? this.workingHours,
       leaveBalance: leaveBalance ?? this.leaveBalance,
+      fcmToken: fcmToken ?? this.fcmToken,  // Add this line
     );
   }
 

@@ -2269,6 +2269,66 @@ export const applyForLeave = functions.https.onCall(
         successMessage = 'Leave request submitted successfully and is pending approval';
       }
 
+      // Send notification to admins/HR/managers for pending leaves
+      if (status === 'pending') {
+        // Format leave type display name
+        const leaveTypeDisplayName = leaveType === 'sick' ? 'Sick Leave' : 
+                                   leaveType === 'casual' ? 'Casual Leave' : 
+                                   leaveType === 'paid' ? 'Paid Leave' : 
+                                   leaveType === 'lwp' ? 'Leave Without Pay' : 
+                                   leaveType === 'officialLeave' ? 'Official Leave' : 'Optional Holiday';
+        
+        // Send notifications asynchronously without blocking the main response
+        setImmediate(async () => {
+          try {
+            const recipients = await getNotificationRecipients();
+            
+            if (recipients.length > 0) {
+              const formatDate = (date: Date) => {
+                return date.toLocaleDateString('en-US', {
+                  year: 'numeric',
+                  month: 'short',
+                  day: 'numeric'
+                });
+              };
+              
+              const dateRange = endDate && startDate.toDateString() !== endDate.toDateString() 
+                ? `${formatDate(startDate)} - ${formatDate(endDate)}`
+                : formatDate(startDate);
+              
+              const title = 'New Leave Application';
+              const body = `${userData?.name || 'Employee'} (${empCode}) applied for ${leaveTypeDisplayName} from ${dateRange}`;
+              
+              const notificationPromises = recipients.map(recipient => 
+                sendFCMNotification(
+                  recipient.fcmToken!,
+                  title,
+                  body,
+                  {
+                    type: 'leave_application',
+                    empCode,
+                    employeeName: userData?.name || 'Unknown',
+                    leaveType: leaveTypeDisplayName,
+                    startDate: startDate.toISOString(),
+                    endDate: endDate.toISOString(),
+                    reason: reason || '',
+                  }
+                ).catch(error => {
+                  functions.logger.error(`Failed to send notification to ${recipient.name}:`, error);
+                  return null;
+                })
+              );
+              
+              const results = await Promise.all(notificationPromises);
+              const successCount = results.filter(result => result !== null).length;
+              functions.logger.info(`Leave application notifications sent: ${successCount}/${recipients.length} for ${empCode}`);
+            }
+          } catch (notificationError) {
+            functions.logger.error('Failed to send leave application notifications:', notificationError);
+          }
+        });
+      }
+
       return {
         success: true,
         leaveRequestId: leaveRequestRef.id,
@@ -2972,6 +3032,72 @@ export const approveLeaveRequest = functions.https.onCall(
 
       functions.logger.info(`Leave request approved successfully: ${requestId}`);
 
+      // Send approval notification to employee
+      setImmediate(async () => {
+        try {
+          // Get employee data
+          const employeeDoc = await admin.firestore()
+            .collection('users')
+            .doc(requestData?.employeeId)
+            .get();
+          
+          if (employeeDoc.exists) {
+            const employeeData = employeeDoc.data();
+            if (employeeData?.fcmToken) {
+              // Get approver name
+              const approverDoc = await admin.firestore()
+                .collection('users')
+                .doc(context.auth.uid)
+                .get();
+              
+              const approverName = approverDoc.exists ? approverDoc.data()?.name || 'Management' : 'Management';
+              
+              // Format leave type display name
+              const leaveTypeDisplayName = leaveType === 'SL' ? 'Sick Leave' : 
+                                         leaveType === 'CL' ? 'Casual Leave' : 
+                                         leaveType === 'PL' ? 'Paid Leave' : 
+                                         leaveType === 'LWP' ? 'Leave Without Pay' : 
+                                         leaveType === 'OL' ? 'Official Leave' : 'Optional Holiday';
+              
+              const formatDate = (timestamp: any) => {
+                const date = timestamp?.toDate ? timestamp.toDate() : new Date(timestamp);
+                return date.toLocaleDateString('en-US', {
+                  year: 'numeric',
+                  month: 'short',
+                  day: 'numeric'
+                });
+              };
+              
+              const startDateStr = formatDate(requestData?.startDate);
+              const endDateStr = formatDate(requestData?.endDate);
+              const dateRange = startDateStr === endDateStr ? startDateStr : `${startDateStr} - ${endDateStr}`;
+              
+              const title = 'Leave Request Approved ✅';
+              const body = `Your ${leaveTypeDisplayName} request for ${dateRange} has been approved by ${approverName}`;
+              
+              await sendFCMNotification(
+                employeeData.fcmToken,
+                title,
+                body,
+                {
+                  type: 'leave_decision',
+                  empCode: employeeData.empCode || '',
+                  leaveType: leaveTypeDisplayName,
+                  startDate: requestData?.startDate?.toDate().toISOString() || '',
+                  endDate: requestData?.endDate?.toDate().toISOString() || '',
+                  status: 'approved',
+                  approvedBy: approverName,
+                }
+              );
+              
+              functions.logger.info(`Approval notification sent to ${employeeData.name} (${employeeData.empCode})`);
+            }
+          }
+        } catch (notificationError) {
+          functions.logger.error('Failed to send approval notification:', notificationError);
+        }
+      });
+
       return {
         success: true,
         message: 'Leave request approved successfully'
@@ -3074,6 +3200,75 @@ export const rejectLeaveRequest = functions.https.onCall(
       });
 
       functions.logger.info(`Leave request rejected successfully: ${requestId}`);
+
+      // Send rejection notification to employee
+      setImmediate(async () => {
+        try {
+          // Get employee data
+          const employeeDoc = await admin.firestore()
+            .collection('users')
+            .doc(requestData?.employeeId)
+            .get();
+          
+          if (employeeDoc.exists) {
+            const employeeData = employeeDoc.data();
+            if (employeeData?.fcmToken) {
+              // Get rejecter name
+              const rejecterDoc = await admin.firestore()
+                .collection('users')
+                .doc(context.auth.uid)
+                .get();
+              
+              const rejecterName = rejecterDoc.exists ? rejecterDoc.data()?.name || 'Management' : 'Management';
+              
+              // Format leave type display name
+              const leaveTypeDisplayName = collectionName === 'SL' ? 'Sick Leave' : 
+                                         collectionName === 'CL' ? 'Casual Leave' : 
+                                         collectionName === 'PL' ? 'Paid Leave' : 
+                                         collectionName === 'LWP' ? 'Leave Without Pay' : 
+                                         collectionName === 'OL' ? 'Official Leave' : 'Optional Holiday';
+              
+              const formatDate = (timestamp: any) => {
+                const date = timestamp?.toDate ? timestamp.toDate() : new Date(timestamp);
+                return date.toLocaleDateString('en-US', {
+                  year: 'numeric',
+                  month: 'short',
+                  day: 'numeric'
+                });
+              };
+              
+              const startDateStr = formatDate(requestData?.startDate);
+              const endDateStr = formatDate(requestData?.endDate);
+              const dateRange = startDateStr === endDateStr ? startDateStr : `${startDateStr} - ${endDateStr}`;
+              
+              const title = 'Leave Request Rejected ❌';
+              let body = `Your ${leaveTypeDisplayName} request for ${dateRange} has been rejected by ${rejecterName}`;
+              if (reason) {
+                body += `. Reason: ${reason}`;
+              }
+              
+              await sendFCMNotification(
+                employeeData.fcmToken,
+                title,
+                body,
+                {
+                  type: 'leave_decision',
+                  empCode: employeeData.empCode || '',
+                  leaveType: leaveTypeDisplayName,
+                  startDate: requestData?.startDate?.toDate().toISOString() || '',
+                  endDate: requestData?.endDate?.toDate().toISOString() || '',
+                  status: 'rejected',
+                  rejectionReason: reason,
+                }
+              );
+              
+              functions.logger.info(`Rejection notification sent to ${employeeData.name} (${employeeData.empCode})`);
+            }
+          }
+        } catch (notificationError) {
+          functions.logger.error('Failed to send rejection notification:', notificationError);
+        }
+      });
 
       return {
         success: true,
@@ -3328,6 +3523,300 @@ export const updateLeaveStatus = functions.https.onCall(
       throw new functions.https.HttpsError(
         "internal",
         "Failed to update leave status."
+      );
+    }
+  }
+);
+
+// =====================================================
+// PUSH NOTIFICATION FUNCTIONS
+// =====================================================
+
+// Helper function to send FCM notification
+async function sendFCMNotification(
+  fcmToken: string,
+  title: string,
+  body: string,
+  data?: { [key: string]: string }
+) {
+  try {
+    const message = {
+      token: fcmToken,
+      notification: {
+        title,
+        body,
+      },
+      data: data || {},
+      android: {
+        notification: {
+          channelId: 'leave_notifications',
+          priority: 'high' as const,
+          defaultSound: true,
+        },
+      },
+      apns: {
+        payload: {
+          aps: {
+            alert: {
+              title,
+              body,
+            },
+            sound: 'default',
+            badge: 1,
+          },
+        },
+      },
+    };
+
+    const response = await admin.messaging().send(message);
+    functions.logger.info('FCM message sent successfully:', response);
+    return response;
+  } catch (error) {
+    functions.logger.error('Error sending FCM message:', error);
+    throw error;
+  }
+}
+
+// Helper function to get admin/HR/manager users with FCM tokens
+async function getNotificationRecipients() {
+  try {
+    const adminUsersSnapshot = await admin.firestore()
+      .collection('users')
+      .where('role', 'in', ['admin', 'hr', 'manager'])
+      .where('isActive', '==', true)
+      .get();
+
+    const recipients: Array<{ uid: string, name: string, role: string, fcmToken?: string }> = [];
+    
+    adminUsersSnapshot.forEach(doc => {
+      const data = doc.data();
+      if (data.fcmToken) {
+        recipients.push({
+          uid: doc.id,
+          name: data.name || 'Unknown',
+          role: data.role || 'admin',
+          fcmToken: data.fcmToken
+        });
+      }
+    });
+
+    return recipients;
+  } catch (error) {
+    functions.logger.error('Error getting notification recipients:', error);
+    return [];
+  }
+}
+
+// Function to notify admins/HR/managers when employee applies for leave
+export const notifyLeaveApplication = functions.https.onCall(
+  async (data, context) => {
+    try {
+      // Verify authentication
+      if (!context.auth) {
+        throw new functions.https.HttpsError(
+          "unauthenticated",
+          "User must be authenticated to send notifications."
+        );
+      }
+
+      const { empCode, employeeName, leaveType, startDate, endDate, reason } = data;
+
+      if (!empCode || !employeeName || !leaveType || !startDate) {
+        throw new functions.https.HttpsError(
+          "invalid-argument",
+          "Missing required fields for leave application notification."
+        );
+      }
+
+      // Get notification recipients (admin, HR, manager)
+      const recipients = await getNotificationRecipients();
+
+      if (recipients.length === 0) {
+        functions.logger.warn('No admin/HR/manager users found with FCM tokens');
+        return {
+          success: true,
+          message: 'No notification recipients available',
+          sentCount: 0
+        };
+      }
+
+      // Format dates for display
+      const formatDate = (dateStr: string) => {
+        return new Date(dateStr).toLocaleDateString('en-US', {
+          year: 'numeric',
+          month: 'short',
+          day: 'numeric'
+        });
+      };
+
+      const dateRange = endDate && startDate !== endDate 
+        ? `${formatDate(startDate)} - ${formatDate(endDate)}`
+        : formatDate(startDate);
+
+      // Send notifications to all recipients
+      const notificationPromises = recipients.map(recipient => {
+        const title = 'New Leave Application';
+        const body = `${employeeName} (${empCode}) applied for ${leaveType} from ${dateRange}`;
+        
+        return sendFCMNotification(
+          recipient.fcmToken!,
+          title,
+          body,
+          {
+            type: 'leave_application',
+            empCode,
+            employeeName,
+            leaveType,
+            startDate,
+            endDate: endDate || startDate,
+            reason: reason || '',
+          }
+        ).catch(error => {
+          functions.logger.error(`Failed to send notification to ${recipient.name} (${recipient.uid}):`, error);
+          return null;
+        });
+      });
+
+      const results = await Promise.all(notificationPromises);
+      const successCount = results.filter(result => result !== null).length;
+
+      functions.logger.info(`Leave application notifications sent: ${successCount}/${recipients.length}`);
+
+      return {
+        success: true,
+        message: 'Leave application notifications sent successfully',
+        sentCount: successCount,
+        totalRecipients: recipients.length
+      };
+
+    } catch (error) {
+      functions.logger.error('Error sending leave application notification:', error);
+      if (error instanceof functions.https.HttpsError) {
+        throw error;
+      }
+      throw new functions.https.HttpsError(
+        "internal",
+        "Failed to send leave application notification."
+      );
+    }
+  }
+);
+
+// Function to notify employee when leave is approved/rejected
+export const notifyLeaveDecision = functions.https.onCall(
+  async (data, context) => {
+    try {
+      // Verify authentication
+      if (!context.auth) {
+        throw new functions.https.HttpsError(
+          "unauthenticated",
+          "User must be authenticated to send notifications."
+        );
+      }
+
+      const { empCode, employeeName, leaveType, startDate, endDate, status, approvedBy, rejectionReason } = data;
+
+      if (!empCode || !employeeName || !leaveType || !startDate || !status) {
+        throw new functions.https.HttpsError(
+          "invalid-argument",
+          "Missing required fields for leave decision notification."
+        );
+      }
+
+      // Get the employee's FCM token
+      const employeeSnapshot = await admin.firestore()
+        .collection('users')
+        .where('empCode', '==', empCode)
+        .where('isActive', '==', true)
+        .limit(1)
+        .get();
+
+      if (employeeSnapshot.empty) {
+        throw new functions.https.HttpsError(
+          "not-found",
+          "Employee not found or inactive."
+        );
+      }
+
+      const employeeDoc = employeeSnapshot.docs[0];
+      const employeeData = employeeDoc.data();
+      const fcmToken = employeeData.fcmToken;
+
+      if (!fcmToken) {
+        functions.logger.warn(`Employee ${empCode} does not have an FCM token`);
+        return {
+          success: true,
+          message: 'Employee does not have FCM token',
+          sentCount: 0
+        };
+      }
+
+      // Format dates for display
+      const formatDate = (dateStr: string) => {
+        return new Date(dateStr).toLocaleDateString('en-US', {
+          year: 'numeric',
+          month: 'short',
+          day: 'numeric'
+        });
+      };
+
+      const dateRange = endDate && startDate !== endDate 
+        ? `${formatDate(startDate)} - ${formatDate(endDate)}`
+        : formatDate(startDate);
+
+      // Prepare notification content based on status
+      let title: string;
+      let body: string;
+      
+      if (status === 'approved') {
+        title = 'Leave Request Approved ✅';
+        body = `Your ${leaveType} request for ${dateRange} has been approved by ${approvedBy || 'management'}`;
+      } else if (status === 'rejected') {
+        title = 'Leave Request Rejected ❌';
+        body = `Your ${leaveType} request for ${dateRange} has been rejected`;
+        if (rejectionReason) {
+          body += `. Reason: ${rejectionReason}`;
+        }
+      } else {
+        throw new functions.https.HttpsError(
+          "invalid-argument",
+          "Invalid leave status. Must be 'approved' or 'rejected'."
+        );
+      }
+
+      // Send notification to employee
+      await sendFCMNotification(
+        fcmToken,
+        title,
+        body,
+        {
+          type: 'leave_decision',
+          empCode,
+          leaveType,
+          startDate,
+          endDate: endDate || startDate,
+          status,
+          approvedBy: approvedBy || '',
+          rejectionReason: rejectionReason || '',
+        }
+      );
+
+      functions.logger.info(`Leave decision notification sent to ${employeeName} (${empCode}): ${status}`);
+
+      return {
+        success: true,
+        message: 'Leave decision notification sent successfully',
+        sentCount: 1
+      };
+
+    } catch (error) {
+      functions.logger.error('Error sending leave decision notification:', error);
+      if (error instanceof functions.https.HttpsError) {
+        throw error;
+      }
+      throw new functions.https.HttpsError(
+        "internal",
+        "Failed to send leave decision notification."
       );
     }
   }

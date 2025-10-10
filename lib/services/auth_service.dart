@@ -1,6 +1,7 @@
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import '../models/user_model.dart';
+import 'notification_service.dart';
 
 class AuthService {
   final FirebaseAuth _auth = FirebaseAuth.instance;
@@ -26,6 +27,8 @@ class AuthService {
         if (userData != null) {
           // Check if user has allowed role
           if (allowedRoles == null || allowedRoles.contains(userData.role)) {
+            // Update FCM token after successful login
+            await NotificationService.updateTokenInFirestore(result.user!.uid);
             return AuthResult.success(userData);
           } else {
             // Role not allowed for this login type
