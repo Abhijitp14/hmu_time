@@ -1635,6 +1635,13 @@ class _LeaveApplicationScreenState extends State<LeaveApplicationScreen>
         
         // Allow modification until the end of the first day (not just before it starts)
         return todayStart.isAtSameMomentAs(leaveStartDate) || todayStart.isBefore(leaveStartDate);
+      } else if (leave.leaveType == LeaveType.casual) {
+        // For CL: Allow cancel until the first day ends (like SL)
+        // Since CL only deducts 1 day regardless of duration, similar to SL
+        final DateTime leaveStartDate = DateTime(leave.startDate.year, leave.startDate.month, leave.startDate.day);
+        
+        // Allow modification until the end of the first day (not just before it starts)
+        return todayStart.isAtSameMomentAs(leaveStartDate) || todayStart.isBefore(leaveStartDate);
       } else if (leave.leaveType == LeaveType.optionalHoliday) {
         // For OH: Allow cancel until the optional holiday day ends
         final DateTime leaveStartDate = DateTime(leave.startDate.year, leave.startDate.month, leave.startDate.day);

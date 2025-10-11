@@ -269,7 +269,9 @@ class LeaveRequest {
         return dateData.toDate();
       } else if (dateData is String) {
         try {
-          return DateTime.parse(dateData);
+          final parsedDate = DateTime.parse(dateData);
+          // If parsed as UTC, convert to local time
+          return parsedDate.isUtc ? parsedDate.toLocal() : parsedDate;
         } catch (e) {
           print('❌ Failed to parse $fieldName string: $dateData, error: $e');
           return DateTime.now();
@@ -281,14 +283,16 @@ class LeaveRequest {
             final seconds = dateData['_seconds'] as int;
             final nanoseconds = dateData['_nanoseconds'] as int;
             return DateTime.fromMillisecondsSinceEpoch(
-              seconds * 1000 + (nanoseconds / 1000000).round()
-            );
+              seconds * 1000 + (nanoseconds / 1000000).round(),
+              isUtc: true
+            ).toLocal();
           } else if (dateData.containsKey('seconds') && dateData.containsKey('nanoseconds')) {
             final seconds = dateData['seconds'] as int;
             final nanoseconds = dateData['nanoseconds'] as int;
             return DateTime.fromMillisecondsSinceEpoch(
-              seconds * 1000 + (nanoseconds / 1000000).round()
-            );
+              seconds * 1000 + (nanoseconds / 1000000).round(),
+              isUtc: true
+            ).toLocal();
           }
         } catch (e) {
           print('❌ Failed to parse $fieldName map: $dateData, error: $e');
@@ -296,7 +300,7 @@ class LeaveRequest {
       } else if (dateData is int) {
         // Handle milliseconds timestamp
         try {
-          return DateTime.fromMillisecondsSinceEpoch(dateData);
+          return DateTime.fromMillisecondsSinceEpoch(dateData, isUtc: true).toLocal();
         } catch (e) {
           print('❌ Failed to parse $fieldName int: $dateData, error: $e');
         }

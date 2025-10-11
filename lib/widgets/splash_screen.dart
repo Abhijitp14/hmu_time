@@ -6,33 +6,15 @@ class SplashScreen extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final screenHeight = MediaQuery.of(context).size.height;
     return Scaffold(
       backgroundColor: const Color(0xFF2F86FE),
       body: Center(
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            Container(
-              width: 100,
-              height: 100,
-              decoration: BoxDecoration(
-                color: Colors.white,
-                borderRadius: BorderRadius.circular(24),
-                boxShadow: [
-                  BoxShadow(
-                    color: Colors.black.withOpacity(0.1),
-                    blurRadius: 20,
-                    offset: const Offset(0, 8),
-                  ),
-                ],
-              ),
-              child: const Icon(
-                Icons.business_center_rounded,
-                color: Color(0xFF2F86FE),
-                size: 50,
-              ),
-            ),
-            const SizedBox(height: 24),
+            Image.asset('assets/images/H&B_logo.png', height: screenHeight * 0.2,),
+            // const SizedBox(height: 24),
             const Text(
               'HMU Time',
               style: TextStyle(

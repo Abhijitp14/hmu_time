@@ -314,10 +314,39 @@ class LeaveService {
     }
   }
 
+  /// Get dates of applied optional holidays
+  Future<Set<DateTime>> _getAppliedOptionalHolidayDates() async {
+    try {
+      final leaveRequests = await getMyLeaveRequests();
+      final appliedDates = <DateTime>{};
+      
+      for (final request in leaveRequests) {
+        // Check if it's an optional holiday leave type and is approved or pending
+        if (request.leaveType == LeaveType.optionalHoliday && 
+            (request.status == 'approved' || request.status == 'pending')) {
+          // For optional holidays, start date is the holiday date
+          final dateOnly = DateTime(
+            request.startDate.year,
+            request.startDate.month,
+            request.startDate.day,
+          );
+          appliedDates.add(dateOnly);
+        }
+      }
+      
+      return appliedDates;
+    } catch (e) {
+      print('❌ LeaveService: Error getting applied optional holiday dates: $e');
+      return <DateTime>{};
+    }
+  }
+
   /// Get available optional holidays
   Future<List<OptionalHoliday>> getAvailableOptionalHolidays() async {
     try {
+      // Get both holidays and applied dates in parallel
       final result = await _functions.httpsCallable('getOptionalHolidays').call();
+      final appliedDates = await _getAppliedOptionalHolidayDates();
       
       if (result.data != null && result.data is Map && result.data['holidays'] != null) {
         final holidaysList = result.data['holidays'] as List;
@@ -376,7 +405,18 @@ class LeaveService {
           final today = DateTime.now();
           final holidayDateOnly = DateTime(holiday.date.year, holiday.date.month, holiday.date.day);
           final todayDateOnly = DateTime(today.year, today.month, today.day);
-          return !holidayDateOnly.isBefore(todayDateOnly);
+          
+          // Exclude past dates
+          if (holidayDateOnly.isBefore(todayDateOnly)) {
+            return false;
+          }
+          
+          // Exclude already applied optional holidays (approved or pending)
+          if (appliedDates.contains(holidayDateOnly)) {
+            return false;
+          }
+          
+          return true;
         }).toList();
       } else {
         print('⚠️ LeaveService: No holidays found in response or wrong format');

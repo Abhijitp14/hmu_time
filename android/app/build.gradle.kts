@@ -10,7 +10,7 @@ plugins {
 
 android {
     namespace = "com.example.hmu_time"
-    compileSdk = 34
+    compileSdk = 35
     ndkVersion = "27.0.12077973"
 
    compileOptions {

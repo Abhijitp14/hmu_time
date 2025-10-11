@@ -30,6 +30,34 @@ class _AdminLeaveRequestsScreenState extends State<AdminLeaveRequestsScreen>
   
   final TextEditingController _searchController = TextEditingController();
 
+  // Helper method to safely format dates
+  String _formatDate(dynamic date, String pattern) {
+    if (date == null) return 'Unknown';
+    
+    DateTime dateTime;
+    if (date is String) {
+      try {
+        dateTime = DateTime.parse(date);
+        // If parsed as UTC, convert to local time
+        if (dateTime.isUtc) {
+          dateTime = dateTime.toLocal();
+        }
+      } catch (e) {
+        return 'Invalid date';
+      }
+    } else if (date is DateTime) {
+      dateTime = date;
+      // If it's UTC, convert to local time
+      if (dateTime.isUtc) {
+        dateTime = dateTime.toLocal();
+      }
+    } else {
+      return 'Invalid date format';
+    }
+    
+    return DateFormat(pattern).format(dateTime);
+  }
+
   @override
   void initState() {
     super.initState();
@@ -794,7 +822,7 @@ class _AdminLeaveRequestsScreenState extends State<AdminLeaveRequestsScreen>
               
               // Submitted date
               Text(
-                'Submitted ${request.submittedDate != null ? DateFormat('MMM d, yyyy h:mm a').format(DateTime.parse(request.submittedDate!)) : 'Unknown'}',
+                'Submitted ${_formatDate(request.submittedDate, 'MMM d, yyyy h:mm a')}',
                 style: Theme.of(context).textTheme.bodySmall?.copyWith(
                   color: Colors.grey[600],
                 ),
@@ -915,8 +943,8 @@ class _AdminLeaveRequestsScreenState extends State<AdminLeaveRequestsScreen>
                       _buildDetailRow('Designation', request.designation),
                       _buildDetailRow('Leave Type', _getLeaveTypeDisplayName(request.leaveType)),
                       _buildDetailRow('Status', request.status.toUpperCase()),
-                      _buildDetailRow('Start Date', DateFormat('EEEE, MMMM d, yyyy').format(DateTime.parse(request.startDate))),
-                      _buildDetailRow('End Date', DateFormat('EEEE, MMMM d, yyyy').format(DateTime.parse(request.endDate))),
+                      _buildDetailRow('Start Date', _formatDate(request.startDate, 'EEEE, MMMM d, yyyy')),
+                      _buildDetailRow('End Date', _formatDate(request.endDate, 'EEEE, MMMM d, yyyy')),
                       _buildDetailRow('Total Days', '${request.totalDays} day${request.totalDays > 1 ? 's' : ''}'),
                       _buildDetailRow('Days Deducted', '${request.daysToDeduct}'),
                       
@@ -924,16 +952,19 @@ class _AdminLeaveRequestsScreenState extends State<AdminLeaveRequestsScreen>
                         _buildDetailRow('Reason', request.reason),
                       
                       if (request.submittedDate != null)
-                        _buildDetailRow('Submitted', DateFormat('MMM d, yyyy h:mm a').format(DateTime.parse(request.submittedDate!))),
+                        _buildDetailRow('Submitted', _formatDate(request.submittedDate, 'MMM d, yyyy h:mm a')),
                       
                       if (request.approvedDate != null)
-                        _buildDetailRow('Approved On', DateFormat('MMM d, yyyy h:mm a').format(DateTime.parse(request.approvedDate!))),
+                        _buildDetailRow('Approved On', _formatDate(request.approvedDate, 'MMM d, yyyy h:mm a')),
                       
                       if (request.approvedBy != null)
                         _buildDetailRow('Approved By', request.approvedBy!),
                       
                       if (request.rejectedDate != null)
-                        _buildDetailRow('Rejected On', DateFormat('MMM d, yyyy h:mm a').format(DateTime.parse(request.rejectedDate!))),
+                        _buildDetailRow('Rejected On', _formatDate(request.rejectedDate, 'MMM d, yyyy h:mm a')),
+                      
+                      if (request.rejectedBy != null)
+                        _buildDetailRow('Rejected By', request.rejectedBy!),
                       
                       if (request.rejectionReason != null)
                         _buildDetailRow('Rejection Reason', request.rejectionReason!),
@@ -1149,6 +1180,8 @@ class _AdminLeaveRequestsScreenState extends State<AdminLeaveRequestsScreen>
       return 'Invalid dates';
     }
   }
+
+
 
   @override
   void dispose() {

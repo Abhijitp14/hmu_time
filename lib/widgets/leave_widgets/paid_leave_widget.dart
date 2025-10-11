@@ -90,7 +90,7 @@ class PaidLeaveWidget extends StatelessWidget {
                         style: TextStyle(fontSize: 12, color: Colors.blue),
                       ),
                       Text(
-                        '• End date: From start date to next 4 weeks',
+                        '• End date: Next day from start date to next 4 weeks',
                         style: TextStyle(fontSize: 12, color: Colors.blue),
                       ),
                       Text(
@@ -183,7 +183,8 @@ class PaidLeaveWidget extends StatelessWidget {
       }
     } else {
       // This is end date selection (firstDate is the selected start date)
-      calculatedFirstDate = firstDate;
+      // Minimum 2 days for paid leave - end date starts from next day of start date
+      calculatedFirstDate = firstDate.add(const Duration(days: 1)); // Next day from start date
       calculatedLastDate = firstDate.add(const Duration(days: 28)); // 4 weeks from start date
       
       // Ensure initial date is not a Sunday

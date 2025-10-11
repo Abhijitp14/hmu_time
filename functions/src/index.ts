@@ -2269,8 +2269,8 @@ export const applyForLeave = functions.https.onCall(
         successMessage = 'Leave request submitted successfully and is pending approval';
       }
 
-      // Send notification to admins/HR/managers for pending leaves
-      if (status === 'pending') {
+      // Send notification to admins/HR/managers for all leaves (both pending and auto-approved)
+      if (status === 'pending' || status === 'approved') {
         // Format leave type display name
         const leaveTypeDisplayName = leaveType === 'sick' ? 'Sick Leave' : 
                                    leaveType === 'casual' ? 'Casual Leave' : 
@@ -2296,8 +2296,10 @@ export const applyForLeave = functions.https.onCall(
                 ? `${formatDate(startDate)} - ${formatDate(endDate)}`
                 : formatDate(startDate);
               
-              const title = 'New Leave Application';
-              const body = `${userData?.name || 'Employee'} (${empCode}) applied for ${leaveTypeDisplayName} from ${dateRange}`;
+              const title = status === 'pending' ? 'New Leave Application' : 'Leave Auto-Approved';
+              const body = status === 'pending' 
+                ? `${userData?.name || 'Employee'} (${empCode}) applied for ${leaveTypeDisplayName} from ${dateRange}` 
+                : `${userData?.name || 'Employee'} (${empCode}) applied for ${leaveTypeDisplayName} from ${dateRange} - Auto-approved`;
               
               const notificationPromises = recipients.map(recipient => 
                 sendFCMNotification(
@@ -2305,13 +2307,14 @@ export const applyForLeave = functions.https.onCall(
                   title,
                   body,
                   {
-                    type: 'leave_application',
+                    type: status === 'pending' ? 'leave_application' : 'leave_auto_approved',
                     empCode,
                     employeeName: userData?.name || 'Unknown',
                     leaveType: leaveTypeDisplayName,
                     startDate: startDate.toISOString(),
                     endDate: endDate.toISOString(),
                     reason: reason || '',
+                    status: status,
                   }
                 ).catch(error => {
                   functions.logger.error(`Failed to send notification to ${recipient.name}:`, error);
@@ -2991,11 +2994,21 @@ export const approveLeaveRequest = functions.https.onCall(
         );
       }
 
+      // Get approver name before updating
+      const approverDoc = await admin.firestore()
+        .collection('users')
+        .doc(context.auth.uid)
+        .get();
+      
+      const approverName = approverDoc.exists ? approverDoc.data()?.name || 'Management' : 'Management';
+      
+      functions.logger.info(`Approver ID: ${context.auth.uid}, Approver Name: ${approverName}`);
+
       // Update the leave request status
       await leaveRequestRef.update({
         status: 'approved',
         approvedAt: admin.firestore.FieldValue.serverTimestamp(),
-        approvedBy: context.auth.uid,
+        approvedBy: approverName,
         approvalComments: comments || '',
         updatedAt: admin.firestore.FieldValue.serverTimestamp()
       });
@@ -3044,20 +3057,15 @@ export const approveLeaveRequest = functions.https.onCall(
           if (employeeDoc.exists) {
             const employeeData = employeeDoc.data();
             if (employeeData?.fcmToken) {
-              // Get approver name
-              const approverDoc = await admin.firestore()
-                .collection('users')
-                .doc(context.auth.uid)
-                .get();
+              // Approver name is already available from the database update above
               
-              const approverName = approverDoc.exists ? approverDoc.data()?.name || 'Management' : 'Management';
-              
-              // Format leave type display name
+              // Format leave type display name (leaveType here is collection name like 'OL', 'CL', etc.)
               const leaveTypeDisplayName = leaveType === 'SL' ? 'Sick Leave' : 
                                          leaveType === 'CL' ? 'Casual Leave' : 
                                          leaveType === 'PL' ? 'Paid Leave' : 
                                          leaveType === 'LWP' ? 'Leave Without Pay' : 
-                                         leaveType === 'OL' ? 'Official Leave' : 'Optional Holiday';
+                                         leaveType === 'OL' ? 'Official Leave' : 
+                                         leaveType === 'OH' ? 'Optional Holiday' : 'Leave';
               
               const formatDate = (timestamp: any) => {
                 const date = timestamp?.toDate ? timestamp.toDate() : new Date(timestamp);
@@ -3190,11 +3198,21 @@ export const rejectLeaveRequest = functions.https.onCall(
         );
       }
 
+      // Get rejector name before updating
+      const rejectorDoc = await admin.firestore()
+        .collection('users')
+        .doc(context.auth.uid)
+        .get();
+      
+      const rejectorName = rejectorDoc.exists ? rejectorDoc.data()?.name || 'Management' : 'Management';
+      
+      functions.logger.info(`Rejector ID: ${context.auth.uid}, Rejector Name: ${rejectorName}`);
+
       // Update the leave request status
       await leaveRequestRef.update({
         status: 'rejected',
         rejectedAt: admin.firestore.FieldValue.serverTimestamp(),
-        rejectedBy: context.auth.uid,
+        rejectedBy: rejectorName,
         rejectionReason: reason,
         updatedAt: admin.firestore.FieldValue.serverTimestamp()
       });
@@ -3213,20 +3231,15 @@ export const rejectLeaveRequest = functions.https.onCall(
           if (employeeDoc.exists) {
             const employeeData = employeeDoc.data();
             if (employeeData?.fcmToken) {
-              // Get rejecter name
-              const rejecterDoc = await admin.firestore()
-                .collection('users')
-                .doc(context.auth.uid)
-                .get();
+              // Rejector name is already available from the database update above
               
-              const rejecterName = rejecterDoc.exists ? rejecterDoc.data()?.name || 'Management' : 'Management';
-              
-              // Format leave type display name
+              // Format leave type display name (collectionName is collection name like 'OL', 'CL', etc.)
               const leaveTypeDisplayName = collectionName === 'SL' ? 'Sick Leave' : 
                                          collectionName === 'CL' ? 'Casual Leave' : 
                                          collectionName === 'PL' ? 'Paid Leave' : 
                                          collectionName === 'LWP' ? 'Leave Without Pay' : 
-                                         collectionName === 'OL' ? 'Official Leave' : 'Optional Holiday';
+                                         collectionName === 'OL' ? 'Official Leave' : 
+                                         collectionName === 'OH' ? 'Optional Holiday' : 'Leave';
               
               const formatDate = (timestamp: any) => {
                 const date = timestamp?.toDate ? timestamp.toDate() : new Date(timestamp);
@@ -3242,7 +3255,7 @@ export const rejectLeaveRequest = functions.https.onCall(
               const dateRange = startDateStr === endDateStr ? startDateStr : `${startDateStr} - ${endDateStr}`;
               
               const title = 'Leave Request Rejected ❌';
-              let body = `Your ${leaveTypeDisplayName} request for ${dateRange} has been rejected by ${rejecterName}`;
+              let body = `Your ${leaveTypeDisplayName} request for ${dateRange} has been rejected by ${rejectorName}`;
               if (reason) {
                 body += `. Reason: ${reason}`;
               }
@@ -3398,10 +3411,6 @@ export const updateLeaveStatuses = functions.pubsub
     }
   });
 
-/**
- * Manual function to update a specific leave status to 'completed'
- * Useful for immediate updates when needed
- */
 export const updateLeaveStatus = functions.https.onCall(
   async (data, context) => {
     try {
