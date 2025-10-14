@@ -11,6 +11,8 @@ import 'add_admin_user_screen.dart';
 import 'employee_list_screen.dart';
 import 'admin_users_list_screen.dart';
 import 'holiday_management_screen.dart';
+import 'system_settings_screen.dart';
+import 'reports_screen.dart';
 
 class AdminDashboardScreen extends StatefulWidget {
   final AppUser user;
@@ -614,8 +616,12 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
         );
         break;
       case 'System Settings':
-        // TODO: Navigate to settings screen
-        _showComingSoon(context, 'System Settings');
+        Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (context) => SystemSettingsScreen(user: widget.user),
+          ),
+        );
         break;
       case 'Attendance':
         // TODO: Navigate to attendance screen
@@ -630,8 +636,12 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
         );
         break;
       case 'Reports':
-        // TODO: Navigate to reports screen
-        _showComingSoon(context, 'Reports');
+        Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (context) => ReportsScreen(user: widget.user),
+          ),
+        );
         break;
       case 'Holiday Management':
         Navigator.push(
@@ -669,6 +679,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
           ),
           ElevatedButton(
             onPressed: () async {
+              Navigator.pop(context); // Close the dialog first
               await AuthService().signOut();
               if (context.mounted) {
                 Navigator.pushNamedAndRemoveUntil(

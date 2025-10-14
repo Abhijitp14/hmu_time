@@ -55,13 +55,19 @@ class _AdminLoginScreenState extends State<AdminLoginScreen> {
   }
 
   void _navigateToDashboard(UserRole role) {
-    // Navigation is handled by AuthWrapper in main.dart
-    // Just show success message
+    // Clear the navigation stack and navigate to home (AuthWrapper will handle routing)
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
         content: Text('Login successful! Welcome ${role.displayName}'),
         backgroundColor: AppColors.success,
       ),
+    );
+    
+    // Clear all routes and go to home - AuthWrapper will redirect to appropriate dashboard
+    Navigator.pushNamedAndRemoveUntil(
+      context, 
+      '/', 
+      (route) => false,
     );
   }
 

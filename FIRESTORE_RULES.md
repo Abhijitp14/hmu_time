@@ -77,13 +77,7 @@ Employee (Basic Privileges)
 - **Read/Create**: Only Admin
 - **Update/Delete**: Not allowed (audit integrity)
 
-### 👤 `/employeeProfiles/{employeeId}`
-- **Read**: Users read their own; Admin/HR read all
-- **Create**: Admin/HR only
-- **Update**: Users update their own (limited fields); Admin/HR update any
-- **Delete**: Only Admin
-
-### 💰 `/payroll/{payrollId}`
+###  `/payroll/{payrollId}`
 - **All Operations**: Only Admin and HR (highly sensitive data)
 
 ## Security Features

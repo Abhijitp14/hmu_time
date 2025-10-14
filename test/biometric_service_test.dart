@@ -1,5 +1,5 @@
 import 'package:flutter_test/flutter_test.dart';
-import '../lib/services/biometric_service.dart';
+import 'package:hmu_time/services/biometric_service.dart';
 
 void main() {
   group('Biometric Data Models Tests', () {

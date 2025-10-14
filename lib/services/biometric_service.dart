@@ -138,11 +138,45 @@ class BiometricRecord {
     // Handle type conversion from Firebase response
     final Map<String, dynamic> data = Map<String, dynamic>.from(map);
     
+    DateTime parsedDateTime;
+    if (data['dateTime'] != null) {
+      try {
+        final dateTimeStr = data['dateTime'].toString();
+        // Handle MM/dd/yyyy HH:mm format (e.g., "11/10/2025 07:21")
+        final parts = dateTimeStr.split(' ');
+        if (parts.length == 2) {
+          final dateParts = parts[0].split('/'); // [MM, dd, yyyy]
+          final timeParts = parts[1].split(':'); // [HH, mm]
+          
+          if (dateParts.length == 3 && timeParts.length == 2) {
+            final month = int.parse(dateParts[0]);
+            final day = int.parse(dateParts[1]);
+            final year = int.parse(dateParts[2]);
+            final hour = int.parse(timeParts[0]);
+            final minute = int.parse(timeParts[1]);
+            
+            // Create in local timezone
+            parsedDateTime = DateTime(year, month, day, hour, minute);
+            print('📅 BiometricRecord: Parsed "$dateTimeStr" -> Year:$year Month:$month Day:$day Hour:$hour Minute:$minute -> Result: $parsedDateTime (IsUTC: ${parsedDateTime.isUtc})');
+          } else {
+            // Fallback to DateTime.parse for ISO formats
+            parsedDateTime = DateTime.parse(dateTimeStr);
+          }
+        } else {
+          // Fallback to DateTime.parse for ISO formats
+          parsedDateTime = DateTime.parse(dateTimeStr);
+        }
+      } catch (e) {
+        print('⚠️ BiometricRecord: Failed to parse dateTime "${data['dateTime']}", using current time: $e');
+        parsedDateTime = DateTime.now();
+      }
+    } else {
+      parsedDateTime = DateTime.now();
+    }
+    
     return BiometricRecord(
       empCode: data['empCode'] ?? '',
-      dateTime: data['dateTime'] != null 
-          ? DateTime.parse(data['dateTime']) 
-          : DateTime.now(),
+      dateTime: parsedDateTime,
       type: data['type'] ?? 'PUNCH',
       deviceId: data['deviceId'],
       location: data['location'] ?? 'Office',

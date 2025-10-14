@@ -306,9 +306,9 @@ class AppUser {
     final hours = workingHours!.floor();
     final minutes = ((workingHours! - hours) * 60).round();
     if (minutes == 0) {
-      return '${hours}:00 hours/day';
+      return '$hours:00 hours/day';
     } else {
-      return '${hours}:${minutes.toString().padLeft(2, '0')} hours/day';
+      return '$hours:${minutes.toString().padLeft(2, '0')} hours/day';
     }
   }
   

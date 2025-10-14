@@ -28,7 +28,13 @@ class AuthService {
           // Check if user has allowed role
           if (allowedRoles == null || allowedRoles.contains(userData.role)) {
             // Update FCM token after successful login
-            await NotificationService.updateTokenInFirestore(result.user!.uid);
+            try {
+              await NotificationService.updateTokenInFirestore(result.user!.uid);
+            } catch (e) {
+              print('Warning: Could not update FCM token immediately after login: $e');
+              // Schedule a retry with delay (especially important for iOS)
+              NotificationService.retryUpdateTokenWithDelay(result.user!.uid, delaySeconds: 10);
+            }
             return AuthResult.success(userData);
           } else {
             // Role not allowed for this login type
@@ -135,6 +141,30 @@ class AuthService {
         return 'Network error. Please check your connection';
       default:
         return 'Authentication failed. Please try again';
+    }
+  }
+
+  // Change password
+  Future<void> changePassword({
+    required String currentPassword,
+    required String newPassword,
+  }) async {
+    final user = _auth.currentUser;
+    if (user == null) {
+      throw Exception('No user signed in');
+    }
+
+    // Re-authenticate the user with current password
+    final credential = EmailAuthProvider.credential(
+      email: user.email!,
+      password: currentPassword,
+    );
+
+    try {
+      await user.reauthenticateWithCredential(credential);
+      await user.updatePassword(newPassword);
+    } on FirebaseAuthException catch (e) {
+      throw Exception(_getErrorMessage(e.code));
     }
   }
 }

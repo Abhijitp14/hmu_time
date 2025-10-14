@@ -19,13 +19,15 @@ class EmployeeHomeScreen extends StatefulWidget {
 class _EmployeeHomeScreenState extends State<EmployeeHomeScreen> {
   final BiometricService _biometricService = BiometricService();
   List<BiometricRecord> _todayPunches = [];
-  List<BiometricRecord> _weekPunches = [];
   bool _isLoadingToday = false;
-  bool _isLoadingWeek = false;
   bool _isSyncing = false;
   String? _todayCheckIn;
   String? _todayCheckOut;
   String? _totalWorkingTime;
+  DateTime? _lastSyncTime;
+  DateTime? _checkInDateTime; // Store actual check-in DateTime for late calculation
+  double _workingHours = 0.0; // Store working hours as decimal for calculation
+  String _workStatus = 'Total Hours'; // Store work status text
   
   // Month selection variables
   DateTime _selectedMonth = DateTime.now();
@@ -40,9 +42,38 @@ class _EmployeeHomeScreenState extends State<EmployeeHomeScreen> {
   void initState() {
     super.initState();
     _calculateAvailableMonths();
-    _loadTodayPunches();
-    _loadWeekPunches();
+    _initializeData();
   }
+
+  Future<void> _initializeData() async {
+    // Load existing data first
+    await _loadTodayPunches();
+    
+    // Only auto-sync on app load if we have never synced before (first time use)
+    // Remove aggressive auto-sync on every app load to prevent constant loading
+    if (_isSelectedDateToday() && !_isSyncing && _lastSyncTime == null) {
+      debugPrint('🚀 First time load: Auto-syncing to get initial punch data...');
+      await _syncAttendance(isAutoSync: true);
+    }
+  }
+
+  bool _shouldAutoSync({bool isRefresh = false}) {
+    // No last sync time - allow only on app start, not frequent auto-syncs
+    if (_lastSyncTime == null) return true;
+    
+    final now = DateTime.now();
+    final timeSinceLastSync = now.difference(_lastSyncTime!);
+    
+    // For pull-to-refresh on current day, require at least 2 minutes between syncs
+    if (isRefresh && _isSelectedDateToday()) {
+      return timeSinceLastSync.inMinutes >= 2;
+    }
+    
+    // For regular auto-sync, wait 10 minutes (much less aggressive)
+    return timeSinceLastSync.inMinutes >= 10;
+  }
+
+
 
   void _calculateAvailableMonths() {
     final now = DateTime.now();
@@ -87,7 +118,7 @@ class _EmployeeHomeScreenState extends State<EmployeeHomeScreen> {
       });
       // Reload data for the selected month
       _loadTodayPunches();
-      _loadWeekPunches();
+
     }
   }
 
@@ -104,12 +135,16 @@ class _EmployeeHomeScreenState extends State<EmployeeHomeScreen> {
     
     if (widget.user.empCode == null) {
       debugPrint('❌ No empCode found, setting loading to false');
-      setState(() => _isLoadingToday = false);
+      if (mounted) {
+        setState(() => _isLoadingToday = false);
+      }
       return;
     }
 
     try {
-      setState(() => _isLoadingToday = true);
+      if (mounted) {
+        setState(() => _isLoadingToday = true);
+      }
       debugPrint('⏳ Loading state set to true');
       
       // Use selected month for data loading
@@ -137,9 +172,12 @@ class _EmployeeHomeScreenState extends State<EmployeeHomeScreen> {
         
         debugPrint('📊 Stored records result: success=${result.success}, recordCount=${result.records.length}');
         
-        // If no stored records found, try to sync fresh data
-        if (!result.success || result.records.isEmpty) {
-          debugPrint('🔄 No stored data found, attempting sync...');
+        // Be much less aggressive about syncing - only sync when really necessary
+        final shouldSync = !result.success || 
+                          (result.records.isEmpty && _lastSyncTime == null); // Only sync if no data and never synced
+                          
+        if (shouldSync) {
+          debugPrint('🔄 No stored data found or missing today\'s data, attempting sync...');
           final syncResult = await _biometricService.syncBiometricData(
             empCode: widget.user.empCode!,
             fromDate: fromDate,
@@ -186,12 +224,14 @@ class _EmployeeHomeScreenState extends State<EmployeeHomeScreen> {
 
       if (result.success) {
         debugPrint('✅ Data loaded successfully, processing ${result.records.length} records');
-        setState(() {
-          // Clear existing data first to prevent duplicates
-          _todayPunches.clear();
-          _todayPunches = _removeDuplicateRecords(result.records);
-          _calculateTodayTimes();
-        });
+        if (mounted) {
+          setState(() {
+            // Clear existing data first to prevent duplicates
+            _todayPunches.clear();
+            _todayPunches = _removeDuplicateRecords(result.records);
+            _calculateTodayTimes();
+          });
+        }
         debugPrint('📋 Today punches after processing: ${_todayPunches.length}');
       } else {
         debugPrint('❌ Failed to load data: ${result.message}');
@@ -203,116 +243,13 @@ class _EmployeeHomeScreenState extends State<EmployeeHomeScreen> {
       _showSnackBar('Failed to load today\'s data: ${e.toString()}', isError: true);
     } finally {
       debugPrint('🏁 _loadTodayPunches finished, setting loading to false');
-      setState(() => _isLoadingToday = false);
+      if (mounted) {
+        setState(() => _isLoadingToday = false);
+      }
     }
   }
 
-  Future<void> _loadWeekPunches() async {
-    debugPrint('🔄 _loadWeekPunches started for empCode: ${widget.user.empCode}');
-    
-    if (widget.user.empCode == null) {
-      debugPrint('❌ No empCode found for week punches, setting loading to false');
-      setState(() => _isLoadingWeek = false);
-      return;
-    }
 
-    try {
-      setState(() => _isLoadingWeek = true);
-      debugPrint('⏳ Week loading state set to true');
-      
-      // Use selected month for data loading
-      final today = DateTime.now();
-      final isCurrentMonth = _selectedMonth.year == today.year && _selectedMonth.month == today.month;
-      
-      // Get date range for selected month
-      final fromDate = DateTime(_selectedMonth.year, _selectedMonth.month, 1);
-      final toDate = isCurrentMonth 
-          ? today 
-          : DateTime(_selectedMonth.year, _selectedMonth.month + 1, 0); // Last day of month
-          
-      debugPrint('📅 Week data range: ${fromDate.toString()} to ${toDate.toString()}');
-          
-      BiometricSyncResult result;
-      
-      try {
-        // First try to get stored records (faster)
-        debugPrint('🔍 Attempting to get stored week records...');
-        result = await _biometricService.getStoredBiometricRecords(
-          empCode: widget.user.empCode!,
-          fromDate: fromDate,
-          toDate: toDate,
-        );
-        
-        debugPrint('📊 Week stored records result: success=${result.success}, recordCount=${result.records.length}');
-        
-        // If no stored records for the month, try syncing
-        if (!result.success || result.records.isEmpty) {
-          debugPrint('🔄 No week stored data found, attempting sync...');
-          final syncResult = await _biometricService.syncBiometricData(
-            empCode: widget.user.empCode!,
-            fromDate: fromDate,
-            toDate: toDate,
-          );
-          
-          debugPrint('🔄 Week sync result: success=${syncResult.success}, recordsProcessed=${syncResult.recordsProcessed}');
-          
-          // After successful sync, add delay and reload the stored data to update UI
-          if (syncResult.success) {
-            debugPrint('⏱️ Week sync successful, waiting 2 seconds for Firestore consistency...');
-            // Wait for Firestore to be consistent after sync
-            await Future.delayed(const Duration(seconds: 2));
-            
-            debugPrint('🔍 Retrying week stored records after sync...');
-            result = await _biometricService.getStoredBiometricRecords(
-              empCode: widget.user.empCode!,
-              fromDate: fromDate,
-              toDate: toDate,
-            );
-            
-            debugPrint('📊 After week sync stored records result: success=${result.success}, recordCount=${result.records.length}');
-            
-            // If still no data after retry, show error
-            if (!result.success || result.records.isEmpty) {
-              debugPrint('⚠️ Still no week data after sync retry');
-              _showSnackBar('Week data synced but not immediately available. Please try refreshing.', isError: true);
-            }
-          } else {
-            debugPrint('❌ Week sync failed, using sync result directly');
-            result = syncResult;
-          }
-        }
-      } catch (e) {
-        debugPrint('❌ Exception during week data fetch: $e');
-        // Create empty result on error
-        result = BiometricSyncResult(
-          success: false, 
-          message: 'Failed to load week data: $e', 
-          recordsProcessed: 0,
-          records: []
-        );
-      }
-
-      if (result.success) {
-        debugPrint('✅ Week data loaded successfully, processing ${result.records.length} records');
-        setState(() {
-          // Clear existing data first to prevent duplicates
-          _weekPunches.clear();
-          _weekPunches = _removeDuplicateRecords(result.records);
-        });
-        debugPrint('📋 Week punches after processing: ${_weekPunches.length}');
-      } else {
-        debugPrint('❌ Failed to load week data: ${result.message}');
-        _showSnackBar('Failed to load week data: ${result.message}', isError: true);
-      }
-    } catch (e) {
-      // Handle errors and show feedback to user
-      debugPrint('❌ Exception in _loadWeekPunches: $e');
-      _showSnackBar('Failed to load week data: ${e.toString()}', isError: true);
-    } finally {
-      debugPrint('🏁 _loadWeekPunches finished, setting loading to false');
-      setState(() => _isLoadingWeek = false);
-    }
-  }
 
   List<BiometricRecord> _removeDuplicateRecords(List<BiometricRecord> records) {
     final seen = <String>{};
@@ -334,6 +271,9 @@ class _EmployeeHomeScreenState extends State<EmployeeHomeScreen> {
       _todayCheckIn = null;
       _todayCheckOut = null;
       _totalWorkingTime = null;
+      _checkInDateTime = null;
+      _workingHours = 0.0;
+      _workStatus = 'Total Hours';
       return;
     }
 
@@ -347,9 +287,13 @@ class _EmployeeHomeScreenState extends State<EmployeeHomeScreen> {
 
     // Set check-in time
     if (inPunches.isNotEmpty) {
+      _checkInDateTime = inPunches.first.dateTime;
       _todayCheckIn = DateFormat('hh:mm a').format(inPunches.first.dateTime);
     } else if (sortedPunches.isNotEmpty) {
+      _checkInDateTime = sortedPunches.first.dateTime;
       _todayCheckIn = DateFormat('hh:mm a').format(sortedPunches.first.dateTime);
+    } else {
+      _checkInDateTime = null;
     }
 
     // Set check-out time and calculate working hours
@@ -361,11 +305,70 @@ class _EmployeeHomeScreenState extends State<EmployeeHomeScreen> {
         final hours = workingDuration.inHours;
         final minutes = workingDuration.inMinutes % 60;
         _totalWorkingTime = '${hours}h ${minutes}m';
+        
+        // Calculate working hours as decimal (e.g., 8.5 hours)
+        _workingHours = hours + (minutes / 60.0);
+        _calculateWorkStatus();
+        print('⏱️ Working Hours Debug: Duration=${workingDuration.inMinutes}min, Hours=$hours, Minutes=$minutes, TotalHours=$_workingHours, Status=$_workStatus');
       }
     } else {
-      // No OUT punch found - don't show check-out time
+      // No OUT punch found - check if there's a check-in
       _todayCheckOut = null;
       _totalWorkingTime = null;
+      _workingHours = 0.0;
+      
+      if (inPunches.isNotEmpty) {
+        // Has check-in but no check-out - mark as incomplete
+        _workStatus = 'Incomplete';
+        print('⏱️ Working Hours Debug: Has check-in but no check-out - Status set to Incomplete');
+      } else {
+        // No check-in and no check-out
+        _workStatus = 'Total Hours';
+      }
+    }
+  }
+
+  bool _isCheckInLate() {
+    if (_checkInDateTime == null) return false;
+    
+    // The issue is that the DateTime is stored as UTC but represents local time
+    // Extract the hour/minute from the UTC DateTime but treat them as local values
+    final utcHour = _checkInDateTime!.hour;
+    final utcMinute = _checkInDateTime!.minute;
+    
+    // Late if after 10:00 AM (hour > 10 OR hour == 10 AND minute > 0)
+    final isLate = utcHour > 10 || (utcHour == 10 && utcMinute > 0);
+    
+    print('🕐 Late Check Debug: OriginalCheckIn=${_checkInDateTime}, UTCHour=$utcHour, UTCMinute=$utcMinute, IsLate=$isLate');
+    print('🕐 Expected Logic: 07:21->Hour=7,Late=false | 08:23->Hour=8,Late=false | 10:01->Hour=10,Min=1,Late=true');
+    
+    return isLate;
+  }
+
+  void _calculateWorkStatus() {
+    if (_workingHours >= 8.0) {
+      _workStatus = 'Completed';
+    } else if (_workingHours >= 5.0) {
+      _workStatus = 'Half Day';
+    } else if (_workingHours > 0) {
+      _workStatus = 'Incomplete';
+    } else {
+      _workStatus = 'Total Hours';
+    }
+    
+    print('📊 Work Status Calculation: ${_workingHours}h -> $_workStatus');
+  }
+
+  Color _getWorkStatusColor() {
+    switch (_workStatus) {
+      case 'Completed':
+        return Colors.green;
+      case 'Half Day':
+        return Colors.orange;
+      case 'Incomplete':
+        return Colors.red;
+      default:
+        return Colors.grey;
     }
   }
 
@@ -384,7 +387,7 @@ class _EmployeeHomeScreenState extends State<EmployeeHomeScreen> {
            _selectedDate.day == today.day;
   }
 
-  Future<void> _syncAttendance() async {
+  Future<void> _syncAttendance({bool isAutoSync = false}) async {
     if (widget.user.empCode == null) {
       _showSnackBar('Employee code not found. Please contact HR.', isError: true);
       return;
@@ -392,13 +395,21 @@ class _EmployeeHomeScreenState extends State<EmployeeHomeScreen> {
 
     // Prevent concurrent sync operations
     if (_isSyncing) {
-      _showSnackBar('Sync already in progress...', isError: false);
+      if (!isAutoSync) {
+        _showSnackBar('Sync already in progress...', isError: false);
+      }
       return;
     }
 
-    setState(() => _isSyncing = true);
+    if (mounted) {
+      setState(() => _isSyncing = true);
+    }
 
     try {
+      // Record sync start time
+      _lastSyncTime = DateTime.now();
+      
+      debugPrint('🔄 Starting sync - isAutoSync: $isAutoSync, empCode: ${widget.user.empCode}');
       // Sync current month and previous 2 months
       final today = DateTime.now();
       final currentMonth = DateTime(today.year, today.month, 1);
@@ -429,7 +440,9 @@ class _EmployeeHomeScreenState extends State<EmployeeHomeScreen> {
         }
       }
 
-      _showSnackBar('Syncing ${monthsToSync.length} months of data...', isError: false);
+      if (!isAutoSync) {
+        _showSnackBar('Syncing ${monthsToSync.length} months of data...', isError: false);
+      }
 
       // Sync each month
       int successfulSyncs = 0;
@@ -460,34 +473,71 @@ class _EmployeeHomeScreenState extends State<EmployeeHomeScreen> {
       }
 
       if (successfulSyncs > 0) {
-        _showSnackBar('Successfully synced $successfulSyncs/${monthsToSync.length} months!', isError: false);
+        if (!isAutoSync) {
+          _showSnackBar('Successfully synced $successfulSyncs/${monthsToSync.length} months!', isError: false);
+        }
         
         // Wait for Firestore to propagate changes before reloading
         await Future.delayed(const Duration(seconds: 3));
         
         // Reload fresh data after successful sync
+        debugPrint('🔄 Reloading data after successful sync...');
         await _loadTodayPunches();
-        await _loadWeekPunches();
+
+        debugPrint('📊 Data reload completed. Today\'s punches: ${_getTodayPunchCount()}');
         
-        _showSnackBar('Data refreshed successfully!', isError: false);
+        if (!isAutoSync) {
+          _showSnackBar('Data refreshed successfully!', isError: false);
+        } else {
+          debugPrint('✅ Auto-sync completed successfully - ${_getTodayPunchCount()} punches found');
+        }
       } else {
-        _showSnackBar('Failed to sync attendance data', isError: true);
+        if (!isAutoSync) {
+          _showSnackBar('Failed to sync attendance data', isError: true);
+        } else {
+          debugPrint('❌ Auto-sync failed');
+        }
       }
     } catch (e) {
-      _showSnackBar('Sync failed: $e', isError: true);
+      if (!isAutoSync) {
+        _showSnackBar('Sync failed: $e', isError: true);
+      } else {
+        debugPrint('❌ Auto-sync failed: $e');
+      }
     } finally {
-      setState(() => _isSyncing = false);
+      if (mounted) {
+        setState(() => _isSyncing = false);
+      }
+    }
+  }
+
+  String _getLastSyncText() {
+    if (_lastSyncTime == null) return '';
+    
+    final now = DateTime.now();
+    final diff = now.difference(_lastSyncTime!);
+    
+    if (diff.inMinutes < 1) {
+      return 'Just now';
+    } else if (diff.inMinutes < 60) {
+      return '${diff.inMinutes}m ago';
+    } else if (diff.inHours < 24) {
+      return '${diff.inHours}h ago';
+    } else {
+      return '${diff.inDays}d ago';
     }
   }
 
   void _showSnackBar(String message, {required bool isError}) {
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(message),
-        backgroundColor: isError ? Colors.red : Colors.green,
-        duration: const Duration(seconds: 3),
-      ),
-    );
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(message),
+          backgroundColor: isError ? Colors.red : Colors.green,
+          duration: const Duration(seconds: 3),
+        ),
+      );
+    }
   }
 
   @override
@@ -497,10 +547,15 @@ class _EmployeeHomeScreenState extends State<EmployeeHomeScreen> {
       body: SafeArea(
         child: RefreshIndicator(
           onRefresh: () async {
-            await Future.wait([
-              _loadTodayPunches(),
-              _loadWeekPunches(),
-            ]);
+            // For current day, only sync if enough time has passed since last sync
+            if (_isSelectedDateToday() && !_isSyncing && _shouldAutoSync(isRefresh: true)) {
+              debugPrint('📱 Pull-to-refresh on current day: Syncing to get latest punch data...');
+              await _syncAttendance(isAutoSync: true);
+            } else {
+              // For other dates or recent sync, just load existing data
+              debugPrint('📱 Pull-to-refresh: Loading existing data (sync not needed or recent sync)');
+              await _loadTodayPunches();
+            }
           },
           child: SingleChildScrollView(
             physics: const AlwaysScrollableScrollPhysics(),
@@ -512,7 +567,7 @@ class _EmployeeHomeScreenState extends State<EmployeeHomeScreen> {
                 _buildDateSelector(),
                 _buildTodayAttendance(),
                 _buildPunchDetails(),
-                _buildWeekSummary(),
+                _buildMonthCalendar(),
                 // const SizedBox(height: 100),
               ],
             ),
@@ -562,22 +617,34 @@ class _EmployeeHomeScreenState extends State<EmployeeHomeScreen> {
               ],
             ),
           ),
-          IconButton(
-            onPressed: _isSyncing ? null : _syncAttendance,
-            icon: _isSyncing
-                ? const SizedBox(
-                    width: 20,
-                    height: 20,
-                    child: CircularProgressIndicator(
-                      strokeWidth: 2,
-                      valueColor: AlwaysStoppedAnimation<Color>(Color(0xFF4285F4)),
-                    ),
-                  )
-                : const Icon(
-                    Icons.sync,
-                    color: Color(0xFF4285F4),
+          Column(
+            children: [
+              IconButton(
+                onPressed: _isSyncing ? null : _syncAttendance,
+                icon: _isSyncing
+                    ? const SizedBox(
+                        width: 20,
+                        height: 20,
+                        child: CircularProgressIndicator(
+                          strokeWidth: 2,
+                          valueColor: AlwaysStoppedAnimation<Color>(Color(0xFF4285F4)),
+                        ),
+                      )
+                    : const Icon(
+                        Icons.sync,
+                        color: Color(0xFF4285F4),
+                      ),
+                tooltip: 'Sync Attendance',
+              ),
+              if (_lastSyncTime != null)
+                Text(
+                  _getLastSyncText(),
+                  style: TextStyle(
+                    fontSize: 8,
+                    color: Colors.grey[600],
                   ),
-            tooltip: 'Sync Attendance',
+                ),
+            ],
           ),
         ],
       ),
@@ -839,9 +906,13 @@ class _EmployeeHomeScreenState extends State<EmployeeHomeScreen> {
                       child: _buildAttendanceCard(
                         'Check In',
                         _todayCheckIn ?? '--:--',
-                        _todayCheckIn != null ? 'On Time' : 'Not Checked',
+                        _todayCheckIn != null 
+                            ? (_isCheckInLate() ? 'Late' : 'On Time') 
+                            : 'Not Checked',
                         Icons.login,
-                        _todayCheckIn != null ? const Color(0xFF4285F4) : Colors.grey,
+                        _todayCheckIn != null 
+                            ? (_isCheckInLate() ? Colors.red : const Color(0xFF4285F4))
+                            : Colors.grey,
                       ),
                     ),
                     const SizedBox(width: 16),
@@ -864,9 +935,9 @@ class _EmployeeHomeScreenState extends State<EmployeeHomeScreen> {
                 child: _buildAttendanceCard(
                   'Working Time',
                   _totalWorkingTime ?? '0h 0m',
-                  'Total Hours',
+                  _workStatus,
                   Icons.access_time,
-                  Colors.green,
+                  _getWorkStatusColor(),
                 ),
               ),
               const SizedBox(width: 16),
@@ -900,7 +971,7 @@ class _EmployeeHomeScreenState extends State<EmployeeHomeScreen> {
         borderRadius: BorderRadius.circular(12),
         boxShadow: [
           BoxShadow(
-            color: Colors.black.withOpacity(0.05),
+            color: Colors.black.withValues(alpha: 0.05),
             blurRadius: 4,
             offset: const Offset(0, 2),
           ),
@@ -914,7 +985,7 @@ class _EmployeeHomeScreenState extends State<EmployeeHomeScreen> {
               Container(
                 padding: const EdgeInsets.all(8),
                 decoration: BoxDecoration(
-                  color: color.withOpacity(0.1),
+                  color: color.withValues(alpha: 0.1),
                   borderRadius: BorderRadius.circular(8),
                 ),
                 child: Icon(icon, color: color, size: 20),
@@ -996,7 +1067,7 @@ class _EmployeeHomeScreenState extends State<EmployeeHomeScreen> {
                         borderRadius: BorderRadius.circular(12),
                         boxShadow: [
                           BoxShadow(
-                            color: Colors.black.withOpacity(0.05),
+                            color: Colors.black.withValues(alpha: 0.05),
                             blurRadius: 4,
                             offset: const Offset(0, 2),
                           ),
@@ -1054,7 +1125,7 @@ class _EmployeeHomeScreenState extends State<EmployeeHomeScreen> {
         borderRadius: BorderRadius.circular(12),
         boxShadow: [
           BoxShadow(
-            color: Colors.black.withOpacity(0.05),
+            color: Colors.black.withValues(alpha: 0.05),
             blurRadius: 4,
             offset: const Offset(0, 2),
           ),
@@ -1066,8 +1137,8 @@ class _EmployeeHomeScreenState extends State<EmployeeHomeScreen> {
             padding: const EdgeInsets.all(8),
             decoration: BoxDecoration(
               color: isCheckIn 
-                  ? const Color(0xFF4285F4).withOpacity(0.1)
-                  : Colors.orange.withOpacity(0.1),
+                  ? const Color(0xFF4285F4).withValues(alpha: 0.1)
+                  : Colors.orange.withValues(alpha: 0.1),
               borderRadius: BorderRadius.circular(8),
             ),
             child: Icon(
@@ -1128,71 +1199,6 @@ class _EmployeeHomeScreenState extends State<EmployeeHomeScreen> {
     );
   }
 
-  Widget _buildWeekSummary() {
-    final today = DateTime.now();
-    final isCurrentMonth = _selectedMonth.year == today.year && _selectedMonth.month == today.month;
-    
-    // Show week summary for current month, calendar for previous months
-    if (isCurrentMonth) {
-      return _buildCurrentWeekSummary();
-    } else {
-      return _buildMonthCalendar();
-    }
-  }
-
-  Widget _buildCurrentWeekSummary() {
-    final weekDays = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
-    final today = DateTime.now();
-    final startOfWeek = today.subtract(Duration(days: today.weekday - 1));
-    final screenSize = MediaQuery.of(context).size;
-    
-    return Padding(
-      padding: const EdgeInsets.all(20),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          const Text(
-            'This Week Summary',
-            style: TextStyle(
-              fontSize: 16,
-              fontWeight: FontWeight.bold,
-              color: Colors.black87,
-            ),
-          ),
-          const SizedBox(height: 16),
-          _isLoadingWeek
-              ? SizedBox(height: screenSize.height * 0.25, child: Center(child: Lottie.asset('assets/animations/sandyLoading.json')))
-              : Container(
-                  padding: const EdgeInsets.all(16),
-                  decoration: BoxDecoration(
-                    color: Colors.white,
-                    borderRadius: BorderRadius.circular(12),
-                    boxShadow: [
-                      BoxShadow(
-                        color: Colors.black.withOpacity(0.05),
-                        blurRadius: 4,
-                        offset: const Offset(0, 2),
-                      ),
-                    ],
-                  ),
-                  child: Column(
-                    children: weekDays.map((day) {
-                      final dayIndex = weekDays.indexOf(day);
-                      final dayDate = startOfWeek.add(Duration(days: dayIndex));
-                      final dayPunches = _weekPunches.where((p) => 
-                        p.dateTime.day == dayDate.day && 
-                        p.dateTime.month == dayDate.month
-                      ).toList();
-                      
-                      return _buildWeekDayItem(day, dayDate, dayPunches);
-                    }).toList(),
-                  ),
-                ),
-        ],
-      ),
-    );
-  }
-
   Widget _buildMonthCalendar() {
     final screenSize = MediaQuery.of(context).size;
     
@@ -1210,7 +1216,7 @@ class _EmployeeHomeScreenState extends State<EmployeeHomeScreen> {
             ),
           ),
           const SizedBox(height: 16),
-          _isLoadingWeek
+          _isLoadingToday
               ? SizedBox(height: screenSize.height * 0.1, child: Center(child: Lottie.asset('assets/animations/sandyLoading.json')))
               : Container(
                   padding: const EdgeInsets.all(16),
@@ -1219,7 +1225,7 @@ class _EmployeeHomeScreenState extends State<EmployeeHomeScreen> {
                     borderRadius: BorderRadius.circular(12),
                     boxShadow: [
                       BoxShadow(
-                        color: Colors.black.withOpacity(0.05),
+                        color: Colors.black.withValues(alpha: 0.05),
                         blurRadius: 4,
                         offset: const Offset(0, 2),
                       ),
@@ -1307,9 +1313,11 @@ class _EmployeeHomeScreenState extends State<EmployeeHomeScreen> {
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
             _buildLegendItem('Present', Colors.green),
-            const SizedBox(width: 20),
+            const SizedBox(width: 16),
             _buildLegendItem('Absent', Colors.red),
-            const SizedBox(width: 20),
+            const SizedBox(width: 16),
+            _buildLegendItem('Holiday', Colors.orange),
+            const SizedBox(width: 16),
             _buildLegendItem('No Data', Colors.grey[300]!),
           ],
         ),
@@ -1322,14 +1330,22 @@ class _EmployeeHomeScreenState extends State<EmployeeHomeScreen> {
                      date.month == _selectedDate.month &&
                      date.year == _selectedDate.year;
     
+    // Check if it's Sunday (weekday == 7)
+    final isSunday = date.weekday == 7;
+    
     Color backgroundColor;
     Color textColor = Colors.black87;
     Color? borderColor;
     
     if (punches.isNotEmpty) {
-      // Present - green background
-      backgroundColor = Colors.green.withOpacity(0.2);
+      // Present - green background (this takes priority over Sunday holiday)
+      backgroundColor = Colors.green.withValues(alpha: 0.2);
       borderColor = Colors.green;
+    } else if (isSunday) {
+      // Sunday - Holiday styling (only when not present)
+      backgroundColor = Colors.orange.withValues(alpha: 0.3);
+      borderColor = Colors.orange;
+      textColor = Colors.orange[800]!;
     } else {
       // Check if it's a past date (should be red for absent) or future date (grey)
       final today = DateTime.now();
@@ -1338,11 +1354,11 @@ class _EmployeeHomeScreenState extends State<EmployeeHomeScreen> {
       
       if (currentDate.isBefore(todayDate)) {
         // Past date with no punches - absent (red)
-        backgroundColor = Colors.red.withOpacity(0.2);
+        backgroundColor = Colors.red.withValues(alpha: 0.2);
         borderColor = Colors.red;
       } else {
         // Future date or today with no data yet - grey
-        backgroundColor = Colors.grey.withOpacity(0.1);
+        backgroundColor = Colors.grey.withValues(alpha: 0.1);
         borderColor = Colors.grey[300];
       }
     }
@@ -1364,16 +1380,38 @@ class _EmployeeHomeScreenState extends State<EmployeeHomeScreen> {
           width: isSelected ? 2 : 1,
         ),
       ),
-      child: Center(
-        child: Text(
-          dayNumber.toString(),
-          style: TextStyle(
-            fontSize: 14,
-            fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
-            color: textColor,
-          ),
-        ),
-      ),
+      child: isSunday && punches.isEmpty
+          ? Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Text(
+                  dayNumber.toString(),
+                  style: TextStyle(
+                    fontSize: 10,
+                    fontWeight: isSelected ? FontWeight.bold : FontWeight.w600,
+                    color: textColor,
+                  ),
+                ),
+                Text(
+                  'Holiday',
+                  style: TextStyle(
+                    fontSize: 8,
+                    fontWeight: FontWeight.w500,
+                    color: textColor,
+                  ),
+                ),
+              ],
+            )
+          : Center(
+              child: Text(
+                dayNumber.toString(),
+                style: TextStyle(
+                  fontSize: 14,
+                  fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
+                  color: textColor,
+                ),
+              ),
+            ),
     );
   }
 
@@ -1385,7 +1423,7 @@ class _EmployeeHomeScreenState extends State<EmployeeHomeScreen> {
           width: 12,
           height: 12,
           decoration: BoxDecoration(
-            color: color.withOpacity(0.2),
+            color: color.withValues(alpha: 0.2),
             border: Border.all(color: color, width: 1),
             borderRadius: BorderRadius.circular(2),
           ),
@@ -1402,60 +1440,6 @@ class _EmployeeHomeScreenState extends State<EmployeeHomeScreen> {
     );
   }
 
-  Widget _buildWeekDayItem(String dayName, DateTime date, List<BiometricRecord> punches) {
-    final isToday = date.day == DateTime.now().day && date.month == DateTime.now().month;
-    final hasAttendance = punches.isNotEmpty;
-    
-    return Container(
-      padding: const EdgeInsets.symmetric(vertical: 8),
-      child: Row(
-        children: [
-          SizedBox(
-            width: 40,
-            child: Text(
-              dayName,
-              style: TextStyle(
-                fontSize: 14,
-                fontWeight: isToday ? FontWeight.bold : FontWeight.normal,
-                color: isToday ? const Color(0xFF4285F4) : Colors.black87,
-              ),
-            ),
-          ),
-          const SizedBox(width: 16),
-          Expanded(
-            child: Row(
-              children: [
-                Container(
-                  width: 8,
-                  height: 8,
-                  decoration: BoxDecoration(
-                    shape: BoxShape.circle,
-                    color: hasAttendance ? Colors.green : Colors.grey[300],
-                  ),
-                ),
-                const SizedBox(width: 12),
-                Text(
-                  hasAttendance ? '${punches.length} punches' : 'No attendance',
-                  style: TextStyle(
-                    fontSize: 13,
-                    color: Colors.grey[600],
-                  ),
-                ),
-              ],
-            ),
-          ),
-          if (hasAttendance) ...[
-            Text(
-              '${punches.where((p) => p.type == 'IN').length}/${punches.where((p) => p.type == 'OUT').length}',
-              style: TextStyle(
-                fontSize: 12,
-                color: Colors.grey[500],
-              ),
-            ),
-          ],
-        ],
-      ),
-    );
-  }
+
 
 }

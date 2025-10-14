@@ -1,6 +1,5 @@
 import 'package:flutter/material.dart';
 import 'package:firebase_core/firebase_core.dart';
-import 'package:firebase_auth/firebase_auth.dart';
 import 'firebase_options.dart';
 import 'app.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
@@ -16,10 +15,18 @@ void main() async {
   await NotificationService.initialize();
   
   // Refresh FCM token for already logged-in user
+  print('🔄 Checking FCM token for current user...');
   await NotificationService.refreshTokenForCurrentUser();
   
-  // Setup FCM token refresh listener
-  _setupTokenRefreshListener();
+  // Check notification availability status
+  final isAvailable = await NotificationService.isPushNotificationAvailable();
+  if (isAvailable) {
+    print('✅ Push notifications are available and ready');
+  } else {
+    print('⚠️  Push notifications are not currently available');
+  }
+  
+
   
   // Handle notification when app is opened from terminated state
   _setupNotificationHandling();
@@ -27,16 +34,7 @@ void main() async {
   runApp(const HmuTimeApp());
 }
 
-// Setup FCM token refresh listener
-void _setupTokenRefreshListener() {
-  FirebaseMessaging.instance.onTokenRefresh.listen((String token) {
-    // Update token in Firestore for current user
-    final user = FirebaseAuth.instance.currentUser;
-    if (user != null) {
-      NotificationService.updateTokenInFirestore(user.uid);
-    }
-  });
-}
+
 
 // Setup notification handling for when app is opened from notification
 void _setupNotificationHandling() {

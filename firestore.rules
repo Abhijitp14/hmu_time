@@ -227,23 +227,6 @@ service cloud.firestore {
       // Audit logs should not be updated or deleted
     }
     
-    // Employee profiles (extended information)
-    match /employeeProfiles/{employeeId} {
-      // Users can read their own profile
-      // Admin/HR can read all profiles
-      allow read: if isOwner(employeeId) || isAdminOrHR();
-      
-      // Admin/HR can create employee profiles
-      allow create: if isAdminOrHR();
-      
-      // Users can update their own profile (limited fields)
-      // Admin/HR can update any profile
-      allow update: if isOwner(employeeId) || isAdminOrHR();
-      
-      // Only admin can delete employee profiles
-      allow delete: if isAdmin();
-    }
-    
     // Payroll information (highly restricted)
     match /payroll/{payrollId} {
       // Only admin and HR can access payroll information

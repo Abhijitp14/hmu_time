@@ -5,9 +5,9 @@ class AdminUserDetailScreen extends StatelessWidget {
   final Map<String, dynamic> adminUser;
 
   const AdminUserDetailScreen({
-    Key? key,
+    super.key,
     required this.adminUser,
-  }) : super(key: key);
+  });
 
   @override
   Widget build(BuildContext context) {

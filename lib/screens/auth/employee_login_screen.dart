@@ -53,13 +53,19 @@ class _EmployeeLoginScreenState extends State<EmployeeLoginScreen> {
   }
 
   void _navigateToEmployeeDashboard() {
-    // Navigation is handled by AuthWrapper in main.dart
-    // Just show success message
+    // Clear the navigation stack and navigate to home (AuthWrapper will handle routing)
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
         content: const Text('Login successful! Welcome Employee'),
         backgroundColor: AppColors.success,
       ),
+    );
+    
+    // Clear all routes and go to home - AuthWrapper will redirect to employee dashboard
+    Navigator.pushNamedAndRemoveUntil(
+      context, 
+      '/', 
+      (route) => false,
     );
   }
 

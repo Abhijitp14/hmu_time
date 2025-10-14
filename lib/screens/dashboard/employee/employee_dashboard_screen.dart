@@ -5,6 +5,10 @@ import '../../../services/auth_service.dart';
 import 'employee_home_screen.dart';
 import 'employee_holidays_screen.dart';
 import 'office_teammates_screen.dart';
+import '../../profile/personal_information_screen.dart';
+import '../../profile/security_settings_screen.dart';
+import '../../profile/notification_settings_screen.dart';
+import '../../profile/help_support_screen.dart';
 
 class EmployeeDashboardScreen extends StatefulWidget {
   final AppUser user;
@@ -90,62 +94,189 @@ class _EmployeeDashboardScreenState extends State<EmployeeDashboardScreen> {
         padding: const EdgeInsets.all(20),
         child: Column(
           children: [
-            // Profile Header
+            // Enhanced Profile Details Card
             Container(
-              padding: const EdgeInsets.all(20),
+              padding: const EdgeInsets.all(24),
               decoration: BoxDecoration(
-                color: Colors.white,
-                borderRadius: BorderRadius.circular(16),
+                gradient: const LinearGradient(
+                  begin: Alignment.topLeft,
+                  end: Alignment.bottomRight,
+                  colors: [
+                    Color(0xFF4285F4),
+                    Color(0xFF6366F1),
+                  ],
+                ),
+                borderRadius: BorderRadius.circular(20),
                 boxShadow: [
                   BoxShadow(
-                    color: Colors.black.withValues(alpha: 0.05),
-                    blurRadius: 10,
-                    offset: const Offset(0, 4),
+                    color: const Color(0xFF4285F4).withValues(alpha: 0.3),
+                    blurRadius: 20,
+                    offset: const Offset(0, 8),
                   ),
                 ],
               ),
               child: Column(
                 children: [
-                  CircleAvatar(
-                    radius: 50,
-                    backgroundColor: const Color(0xFF4285F4),
-                    child: Text(
-                      widget.user.initials,
-                      style: const TextStyle(
-                        color: Colors.white,
-                        fontSize: 32,
-                        fontWeight: FontWeight.bold,
+                  // Profile Picture with Status Indicator
+                  Stack(
+                    children: [
+                      Container(
+                        decoration: BoxDecoration(
+                          shape: BoxShape.circle,
+                          border: Border.all(
+                            color: Colors.white.withValues(alpha: 0.3),
+                            width: 3,
+                          ),
+                        ),
+                        child: CircleAvatar(
+                          radius: 55,
+                          backgroundColor: Colors.white.withValues(alpha: 0.2),
+                          child: Text(
+                            widget.user.initials,
+                            style: const TextStyle(
+                              color: Colors.white,
+                              fontSize: 36,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                        ),
                       ),
-                    ),
+                      if (widget.user.isActive)
+                        Positioned(
+                          bottom: 5,
+                          right: 5,
+                          child: Container(
+                            width: 20,
+                            height: 20,
+                            decoration: BoxDecoration(
+                              color: Colors.green,
+                              shape: BoxShape.circle,
+                              border: Border.all(color: Colors.white, width: 2),
+                            ),
+                          ),
+                        ),
+                    ],
                   ),
-                  const SizedBox(height: 16),
+                  
+                  const SizedBox(height: 20),
+                  
+                  // Name and Basic Info
                   Text(
                     widget.user.displayName,
                     style: const TextStyle(
-                      fontSize: 22,
+                      fontSize: 24,
                       fontWeight: FontWeight.bold,
-                      color: Colors.black87,
+                      color: Colors.white,
                     ),
+                    textAlign: TextAlign.center,
                   ),
-                  const SizedBox(height: 4),
-                  Text(
-                    widget.user.role.displayName,
-                    style: TextStyle(
-                      fontSize: 16,
-                      color: Colors.grey[600],
-                    ),
-                  ),
+                  
                   const SizedBox(height: 8),
-                  Text(
-                    'ID: ${widget.user.displayEmpCode}',
-                    style: TextStyle(
-                      fontSize: 14,
-                      color: Colors.grey[600],
+                  
+                  // Role with Icon
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                    decoration: BoxDecoration(
+                      color: Colors.white.withValues(alpha: 0.2),
+                      borderRadius: BorderRadius.circular(20),
                     ),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(
+                          widget.user.role == UserRole.admin 
+                              ? Icons.admin_panel_settings 
+                              : Icons.person,
+                          color: Colors.white,
+                          size: 16,
+                        ),
+                        const SizedBox(width: 6),
+                        Text(
+                          widget.user.role.displayName,
+                          style: const TextStyle(
+                            fontSize: 14,
+                            color: Colors.white,
+                            fontWeight: FontWeight.w500,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  
+                  const SizedBox(height: 16),
+                  
+                  // Employee Details in Cards
+                  Row(
+                    children: [
+                      Expanded(
+                        child: _buildInfoCard(
+                          icon: Icons.badge,
+                          label: 'Employee ID',
+                          value: widget.user.displayEmpCode,
+                        ),
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: _buildInfoCard(
+                          icon: Icons.business,
+                          label: 'Department',
+                          value: widget.user.department ?? 'General',
+                        ),
+                      ),
+                    ],
+                  ),
+                  
+                  const SizedBox(height: 12),
+                  
+                  // Additional Info Row
+                  Row(
+                    children: [
+                      Expanded(
+                        child: _buildInfoCard(
+                          icon: Icons.work,
+                          label: 'Designation',
+                          value: widget.user.designation ?? 'Employee',
+                        ),
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: _buildInfoCard(
+                          icon: Icons.schedule,
+                          label: 'Work Hours',
+                          value: '${widget.user.workingHours?.toStringAsFixed(0) ?? "8"} hrs/day',
+                        ),
+                      ),
+                    ],
                   ),
                 ],
               ),
             ),
+            
+            // const SizedBox(height: 24),
+            
+            // Quick Status Card
+            // Container(
+            //   padding: const EdgeInsets.all(20),
+            //   decoration: BoxDecoration(
+            //     color: Colors.white,
+            //     borderRadius: BorderRadius.circular(16),
+            //     boxShadow: [
+            //       BoxShadow(
+            //         color: Colors.black.withValues(alpha: 0.05),
+            //         blurRadius: 10,
+            //         offset: const Offset(0, 4),
+            //       ),
+            //     ],
+            //   ),
+            //   child: Column(
+            //     crossAxisAlignment: CrossAxisAlignment.start,
+            //     children: [
+                  
+            //       // const SizedBox(height: 16),
+                  
+            //     ],
+            //   ),
+            // ),
             
             const SizedBox(height: 30),
             
@@ -153,22 +284,22 @@ class _EmployeeDashboardScreenState extends State<EmployeeDashboardScreen> {
             _buildProfileOption(
               icon: Icons.person,
               title: 'Personal Information',
-              onTap: () {},
+              onTap: () => _navigateToPersonalInformation(context),
             ),
             _buildProfileOption(
               icon: Icons.security,
               title: 'Security Settings',
-              onTap: () {},
+              onTap: () => _navigateToSecuritySettings(context),
             ),
             _buildProfileOption(
               icon: Icons.notifications,
               title: 'Notifications',
-              onTap: () {},
+              onTap: () => _navigateToNotificationSettings(context),
             ),
             _buildProfileOption(
               icon: Icons.help,
               title: 'Help & Support',
-              onTap: () {},
+              onTap: () => _navigateToHelpSupport(context),
             ),
             _buildProfileOption(
               icon: Icons.logout,
@@ -231,4 +362,96 @@ class _EmployeeDashboardScreenState extends State<EmployeeDashboardScreen> {
     await AuthService().signOut();
     // Navigation is handled by AuthWrapper
   }
+
+  void _navigateToPersonalInformation(BuildContext context) {
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (context) => PersonalInformationScreen(user: widget.user),
+      ),
+    );
+  }
+
+  void _navigateToSecuritySettings(BuildContext context) {
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (context) => SecuritySettingsScreen(user: widget.user),
+      ),
+    );
+  }
+
+  void _navigateToNotificationSettings(BuildContext context) {
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (context) => NotificationSettingsScreen(user: widget.user),
+      ),
+    );
+  }
+
+  void _navigateToHelpSupport(BuildContext context) {
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (context) => HelpSupportScreen(user: widget.user),
+      ),
+    );
+  }
+
+  Widget _buildInfoCard({
+    required IconData icon,
+    required String label,
+    required String value,
+  }) {
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: Colors.white.withValues(alpha: 0.15),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(
+          color: Colors.white.withValues(alpha: 0.3),
+          width: 1,
+        ),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(
+                icon,
+                color: Colors.white.withValues(alpha: 0.8),
+                size: 16,
+              ),
+              const SizedBox(width: 6),
+              Expanded(
+                child: Text(
+                  label,
+                  style: TextStyle(
+                    fontSize: 12,
+                    color: Colors.white.withValues(alpha: 0.8),
+                    fontWeight: FontWeight.w500,
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 6),
+          Text(
+            value,
+            style: const TextStyle(
+              fontSize: 14,
+              color: Colors.white,
+              fontWeight: FontWeight.w600,
+            ),
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+          ),
+        ],
+      ),
+    );
+  }
+
+
 }

@@ -293,28 +293,6 @@ export const createEmployee = functions.https.onCall(
         data.department
       );
 
-
-
-      // Create initial employee profile data
-      await admin
-        .firestore()
-        .collection("employeeProfiles")
-        .doc(userRecord.uid)
-        .set({
-          uid: userRecord.uid,
-          empCode: data.empCode,
-          department: data.department,
-          joiningDate: joiningDate || admin.firestore.FieldValue.serverTimestamp(),
-          isActive: true,
-          attendance: {
-            totalPresent: 0,
-            totalAbsent: 0,
-            totalLeaves: 0,
-          },
-          createdAt: admin.firestore.FieldValue.serverTimestamp(),
-          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-        });
-
       functions.logger.info(`Employee account created successfully`, {
         uid: userRecord.uid,
         email: data.email,
@@ -725,7 +703,7 @@ export const updateEmployee = functions.https.onCall(
 
 /**
  * Cloud Function to delete employee
- * Only deletes from users, employeeProfiles, and Firebase Auth
+ * Only deletes from users collection and Firebase Auth
  * Other data cleanup can be implemented separately when needed
  */
 export const deleteEmployee = functions.https.onCall(
@@ -802,17 +780,6 @@ export const deleteEmployee = functions.https.onCall(
       // Delete from users collection
       batch.delete(admin.firestore().collection("users").doc(normalizedUid));
       deletedCollections.push("users");
-
-      // Delete from employeeProfiles if exists
-      const profileDoc = await admin.firestore()
-        .collection("employeeProfiles")
-        .doc(normalizedUid)
-        .get();
-
-      if (profileDoc.exists) {
-        batch.delete(admin.firestore().collection("employeeProfiles").doc(normalizedUid));
-        deletedCollections.push("employeeProfiles");
-      }
 
       // Commit Firestore changes
       await batch.commit();
@@ -1122,8 +1089,9 @@ async function storeBiometricData(
   const db = admin.firestore();
   
   // Check if employee still exists before creating attendance records
-  const employeeExists = await db.collection('employeeProfiles')
+  const employeeExists = await db.collection('users')
     .where('empCode', '==', syncMetadata.empCode)
+    .where('role', '==', 'employee')
     .limit(1)
     .get();
     
