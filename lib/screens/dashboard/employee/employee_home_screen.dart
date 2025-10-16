@@ -3,6 +3,7 @@ import 'package:intl/intl.dart';
 import 'package:lottie/lottie.dart';
 import '../../../models/user_model.dart';
 import '../../../services/biometric_service.dart';
+import '../../../services/working_hours_service.dart';
 
 class EmployeeHomeScreen extends StatefulWidget {
   final AppUser user;
@@ -18,16 +19,23 @@ class EmployeeHomeScreen extends StatefulWidget {
 
 class _EmployeeHomeScreenState extends State<EmployeeHomeScreen> {
   final BiometricService _biometricService = BiometricService();
+  final WorkingHoursService _workingHoursService = WorkingHoursService();
   List<BiometricRecord> _todayPunches = [];
   bool _isLoadingToday = false;
   bool _isSyncing = false;
   String? _todayCheckIn;
   String? _todayCheckOut;
-  String? _totalWorkingTime;
+
   DateTime? _lastSyncTime;
   DateTime? _checkInDateTime; // Store actual check-in DateTime for late calculation
   double _workingHours = 0.0; // Store working hours as decimal for calculation
   String _workStatus = 'Total Hours'; // Store work status text
+  
+  // Dynamic working hours settings from admin
+  WorkingHoursSettings? _workingHoursSettings;
+  double _requiredHours = 8.0;
+  double _halfDayThreshold = 4.9; // Half Day: 0 to 4:59 hours
+  double _incompleteThreshold = 7.9; // Incomplete: 5 to 7:59 hours
   
   // Month selection variables
   DateTime _selectedMonth = DateTime.now();
@@ -46,7 +54,9 @@ class _EmployeeHomeScreenState extends State<EmployeeHomeScreen> {
   }
 
   Future<void> _initializeData() async {
-    // Load existing data first
+    // Load working hours settings first
+    await _loadWorkingHoursSettings();
+    // Load existing data
     await _loadTodayPunches();
     
     // Only auto-sync on app load if we have never synced before (first time use)
@@ -102,6 +112,51 @@ class _EmployeeHomeScreenState extends State<EmployeeHomeScreen> {
     // Set selected month to current month by default
     _selectedMonth = currentMonth;
     _selectedDate = DateTime(now.year, now.month, now.day);
+  }
+
+  Future<void> _loadWorkingHoursSettings() async {
+    try {
+      _workingHoursSettings = await _workingHoursService.getWorkingHoursSettings();
+      setState(() {
+        // Use employee-type-specific working hours from v3.0 structure
+        if (widget.user.isPartTimeEmployee) {
+          _requiredHours = _workingHoursSettings!.partTimeEmployee.workingHours;
+          _incompleteThreshold = _workingHoursSettings!.partTimeEmployee.incompleteRange.end;
+          // Part-time doesn't use half-day concept, only complete/incomplete
+          _halfDayThreshold = 0.0;
+        } else if (widget.user.isConsultantEmployee) {
+          _requiredHours = _workingHoursSettings!.consultantEmployee.workingHours;
+          // Consultant doesn't use half-day or incomplete concept, only full day or absent
+          _halfDayThreshold = 0.0;
+          _incompleteThreshold = 0.0;
+        } else {
+          // Full-time employee - use v3.0 structure
+          _requiredHours = _workingHoursSettings!.fullTimeEmployee.workingHours;
+          _halfDayThreshold = _workingHoursSettings!.fullTimeEmployee.halfDayRange.end;
+          _incompleteThreshold = _workingHoursSettings!.fullTimeEmployee.incompleteRange.end;
+        }
+      });
+      
+      final employeeTypeText = widget.user.isPartTimeEmployee ? 'Part-Time' : 
+                               widget.user.isConsultantEmployee ? 'Consultant' : 'Full-Time';
+      print('📋 Loaded Working Hours Settings for $employeeTypeText: Required=${_requiredHours}h, Half=${_halfDayThreshold}h, Incomplete=${_incompleteThreshold}h');
+    } catch (e) {
+      print('⚠️ Failed to load working hours settings, using defaults: $e');
+      // Keep default values based on employee type
+      if (widget.user.isPartTimeEmployee) {
+        _requiredHours = 4.0;
+        _incompleteThreshold = 3.5;
+        _halfDayThreshold = 0.0;
+      } else if (widget.user.isConsultantEmployee) {
+        _requiredHours = 6.0;
+        _incompleteThreshold = 0.0;
+        _halfDayThreshold = 0.0;
+      } else {
+        _requiredHours = 8.0;
+        _halfDayThreshold = 4.0;
+        _incompleteThreshold = 7.5;
+      }
+    }
   }
 
   void _onMonthChanged(DateTime? newMonth) {
@@ -270,7 +325,6 @@ class _EmployeeHomeScreenState extends State<EmployeeHomeScreen> {
     if (selectedDateOnly.isEmpty) {
       _todayCheckIn = null;
       _todayCheckOut = null;
-      _totalWorkingTime = null;
       _checkInDateTime = null;
       _workingHours = 0.0;
       _workStatus = 'Total Hours';
@@ -304,7 +358,7 @@ class _EmployeeHomeScreenState extends State<EmployeeHomeScreen> {
         final workingDuration = outPunches.last.dateTime.difference(inPunches.first.dateTime);
         final hours = workingDuration.inHours;
         final minutes = workingDuration.inMinutes % 60;
-        _totalWorkingTime = '${hours}h ${minutes}m';
+
         
         // Calculate working hours as decimal (e.g., 8.5 hours)
         _workingHours = hours + (minutes / 60.0);
@@ -314,13 +368,13 @@ class _EmployeeHomeScreenState extends State<EmployeeHomeScreen> {
     } else {
       // No OUT punch found - check if there's a check-in
       _todayCheckOut = null;
-      _totalWorkingTime = null;
+
       _workingHours = 0.0;
       
       if (inPunches.isNotEmpty) {
-        // Has check-in but no check-out - mark as incomplete
-        _workStatus = 'Incomplete';
-        print('⏱️ Working Hours Debug: Has check-in but no check-out - Status set to Incomplete');
+        // Has check-in but no check-out - mark as Half Day
+        _workStatus = 'Half Day';
+        print('⏱️ Working Hours Debug: Has check-in but no check-out - Status set to Half Day');
       } else {
         // No check-in and no check-out
         _workStatus = 'Total Hours';
@@ -331,37 +385,80 @@ class _EmployeeHomeScreenState extends State<EmployeeHomeScreen> {
   bool _isCheckInLate() {
     if (_checkInDateTime == null) return false;
     
-    // The issue is that the DateTime is stored as UTC but represents local time
+    // Only check for late arrival for full-time employees
+    if (!widget.user.isFullTimeEmployee) {
+      return false; // Part-time and consultants don't have late marks
+    }
+    
+    // Get late threshold from settings, default to 10:00 if not available
+    String lateThresholdTime = '10:00';
+    if (_workingHoursSettings != null) {
+      lateThresholdTime = _workingHoursSettings!.lateThresholdTime;
+    }
+    
+    // Parse the late threshold time
+    final lateTimeParts = lateThresholdTime.split(':');
+    final lateHour = int.parse(lateTimeParts[0]);
+    final lateMinute = int.parse(lateTimeParts[1]);
+    
     // Extract the hour/minute from the UTC DateTime but treat them as local values
     final utcHour = _checkInDateTime!.hour;
     final utcMinute = _checkInDateTime!.minute;
     
-    // Late if after 10:00 AM (hour > 10 OR hour == 10 AND minute > 0)
-    final isLate = utcHour > 10 || (utcHour == 10 && utcMinute > 0);
+    // Check if check-in time is after the late threshold
+    final isLate = utcHour > lateHour || (utcHour == lateHour && utcMinute > lateMinute);
     
-    print('🕐 Late Check Debug: OriginalCheckIn=${_checkInDateTime}, UTCHour=$utcHour, UTCMinute=$utcMinute, IsLate=$isLate');
-    print('🕐 Expected Logic: 07:21->Hour=7,Late=false | 08:23->Hour=8,Late=false | 10:01->Hour=10,Min=1,Late=true');
+    print('🕐 Late Check Debug: CheckIn=${_checkInDateTime}, UTCHour=$utcHour, UTCMinute=$utcMinute, LateThreshold=${lateThresholdTime}, IsLate=$isLate');
     
     return isLate;
   }
 
   void _calculateWorkStatus() {
-    if (_workingHours >= 8.0) {
-      _workStatus = 'Completed';
-    } else if (_workingHours >= 5.0) {
-      _workStatus = 'Half Day';
-    } else if (_workingHours > 0) {
-      _workStatus = 'Incomplete';
+    if (widget.user.isPartTimeEmployee) {
+      // Part-time employee logic: Use dynamic thresholds from admin settings
+      if (_workingHours >= _requiredHours) {
+        _workStatus = 'Full Day';
+      } else if (_workingHours > 0 && _workingHours <= _incompleteThreshold) {
+        _workStatus = 'Incomplete';
+      } else if (_workingHours > _incompleteThreshold && _workingHours < _requiredHours) {
+        _workStatus = 'Full Day'; // Hours between incomplete end and required hours = Full Day
+      } else {
+        _workStatus = 'Total Hours';
+      }
+    } else if (widget.user.isConsultantEmployee) {
+      // Consultant employee logic: Only Full Day or Total Hours (no partial/half day concepts)
+      if (_workingHours >= _requiredHours) {
+        _workStatus = 'Full Day';
+      } else {
+        _workStatus = 'Total Hours';
+      }
     } else {
-      _workStatus = 'Total Hours';
+      // Full-time employee logic: Use dynamic thresholds from admin settings
+      if (_workingHours >= _requiredHours) {
+        _workStatus = 'Full Day';
+      } else if (_workingHours > _halfDayThreshold && _workingHours <= _incompleteThreshold) {
+        _workStatus = 'Incomplete';
+      } else if (_workingHours > _incompleteThreshold && _workingHours < _requiredHours) {
+        _workStatus = 'Full Day'; // Hours between incomplete end and required hours = Full Day
+      } else if (_workingHours > 0 && _workingHours <= _halfDayThreshold) {
+        _workStatus = 'Half Day';
+      } else {
+        _workStatus = 'Total Hours';
+      }
     }
     
-    print('📊 Work Status Calculation: ${_workingHours}h -> $_workStatus');
+    final employeeType = widget.user.isPartTimeEmployee ? 'Part-Time' : 
+                         widget.user.isConsultantEmployee ? 'Consultant' : 'Full-Time';
+    print('📊 Work Status Calculation [$employeeType]: ${_workingHours}h (Required: ${_requiredHours}h, Half: ≤${_halfDayThreshold}h, Incomplete: ≤${_incompleteThreshold}h) -> $_workStatus');
+    
+    if (widget.user.isFullTimeEmployee || widget.user.isPartTimeEmployee) {
+      print('📊 Range Logic: Half(0-${_halfDayThreshold}h), Incomplete(${_halfDayThreshold}-${_incompleteThreshold}h), Full(${_incompleteThreshold}h+)');
+    }
   }
 
   Color _getWorkStatusColor() {
     switch (_workStatus) {
-      case 'Completed':
+      case 'Full Day':
         return Colors.green;
       case 'Half Day':
         return Colors.orange;
@@ -932,13 +1029,7 @@ class _EmployeeHomeScreenState extends State<EmployeeHomeScreen> {
           Row(
             children: [
               Expanded(
-                child: _buildAttendanceCard(
-                  'Working Time',
-                  _totalWorkingTime ?? '0h 0m',
-                  _workStatus,
-                  Icons.access_time,
-                  _getWorkStatusColor(),
-                ),
+                child: _buildWorkingTimeCard(),
               ),
               const SizedBox(width: 16),
               Expanded(
@@ -951,6 +1042,101 @@ class _EmployeeHomeScreenState extends State<EmployeeHomeScreen> {
                 ),
               ),
             ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildWorkingTimeCard() {
+    final progressPercentage = (_workingHours / _requiredHours).clamp(0.0, 1.0);
+    final hoursInt = _workingHours.floor();
+    final minutes = ((_workingHours - hoursInt) * 60).round();
+    final timeDisplay = '${hoursInt}h ${minutes}m';
+    final targetDisplay = '/ ${_requiredHours.toStringAsFixed(1)}h';
+    
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(12),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.05),
+            blurRadius: 4,
+            offset: const Offset(0, 2),
+          ),
+        ],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Container(
+                padding: const EdgeInsets.all(8),
+                decoration: BoxDecoration(
+                  color: _getWorkStatusColor().withValues(alpha: 0.1),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Icon(Icons.access_time, color: _getWorkStatusColor(), size: 20),
+              ),
+              const Spacer(),
+              Text(
+                '${(progressPercentage * 100).toStringAsFixed(0)}%',
+                style: TextStyle(
+                  fontSize: 12,
+                  fontWeight: FontWeight.bold,
+                  color: _getWorkStatusColor(),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          Row(
+            children: [
+              Text(
+                timeDisplay,
+                style: const TextStyle(
+                  fontSize: 18,
+                  fontWeight: FontWeight.bold,
+                  color: Colors.black87,
+                ),
+              ),
+              Text(
+                targetDisplay,
+                style: TextStyle(
+                  fontSize: 14,
+                  color: Colors.grey[600],
+                  fontWeight: FontWeight.w500,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 4),
+          Text(
+            'Working Time',
+            style: const TextStyle(
+              fontSize: 12,
+              color: Colors.black54,
+              fontWeight: FontWeight.w500,
+            ),
+          ),
+          const SizedBox(height: 8),
+          LinearProgressIndicator(
+            value: progressPercentage,
+            backgroundColor: Colors.grey[200],
+            valueColor: AlwaysStoppedAnimation<Color>(_getWorkStatusColor()),
+            minHeight: 4,
+          ),
+          const SizedBox(height: 4),
+          Text(
+            _workStatus,
+            style: TextStyle(
+              fontSize: 10,
+              color: _getWorkStatusColor(),
+              fontWeight: FontWeight.w600,
+            ),
           ),
         ],
       ),

@@ -242,7 +242,17 @@ service cloud.firestore {
       // Employees can only read holidays
       allow read: if isEmployee();
     }
-    
+
+    // System settings collection (working hours, attendance settings, etc.)
+    match /system_settings/{settingId} {
+      // Allow all authenticated users to read system settings
+      // This is safe since these are global configuration settings
+      allow read: if isAuthenticated();
+      
+      // Only admin can update system settings
+      allow write: if isAdmin();
+    }
+
     // Default deny rule for any other collections
     match /{document=**} {
       allow read, write: if false;

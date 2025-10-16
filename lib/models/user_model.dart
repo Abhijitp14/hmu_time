@@ -7,6 +7,8 @@ enum UserRole {
   employee,
 }
 
+
+
 extension UserRoleExtension on UserRole {
   String get displayName {
     switch (this) {
@@ -49,6 +51,8 @@ extension UserRoleExtension on UserRole {
     }
   }
 }
+
+
 
 class AppUser {
   final String id;
@@ -263,6 +267,19 @@ class AppUser {
   bool get isAdmin => role == UserRole.admin;
   bool get isHR => role == UserRole.hr;
   bool get isManager => role == UserRole.manager;
+  
+  // Employee type helpers based on existing employmentType field
+  bool get isPartTimeEmployee {
+    return employmentType?.toLowerCase().contains('part') == true;
+  }
+  
+  bool get isFullTimeEmployee {
+    return employmentType?.toLowerCase().contains('full') == true;
+  }
+  
+  bool get isConsultantEmployee {
+    return employmentType?.toLowerCase().contains('consultant') == true;
+  }
   
   bool get canManageEmployees => isAdmin || isHR;
   bool get canApproveLeave => isAdmin || isHR || isManager;
