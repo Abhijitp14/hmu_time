@@ -3801,93 +3801,139 @@ export const notifyLeaveDecision = functions.https.onCall(
 
 // ============ WORKING HOURS MANAGEMENT FUNCTIONS ============
 
-// Get working hours settings (System function - no authentication required for reading settings)
-export const getWorkingHoursSettings = functions.https.onCall(async (data, context) => {
+// Get working hours settings (Public HTTP function - no authentication required)
+export const getSystemSettings = functions.https.onRequest(async (req, res) => {
   try {
-    // Log all context details for debugging
-    functions.logger.info('getWorkingHoursSettings called:', {
-      authUid: context.auth?.uid,
-      authToken: context.auth?.token ? 'present' : 'missing',
-      hasAuth: !!context.auth,
-      tokenEmail: context.auth?.token?.email,
-      tokenRole: context.auth?.token?.role,
-      timestamp: new Date().toISOString()
-    });
+    // Set CORS headers to allow browser requests
+    res.set('Access-Control-Allow-Origin', '*');
+    res.set('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+    res.set('Access-Control-Allow-Headers', 'Content-Type');
 
-    // For system settings, allow both authenticated and unauthenticated access
-    // This is safe since it's read-only system configuration data
-    functions.logger.info('Allowing access to system settings (read-only configuration)');
+    if (req.method === 'OPTIONS') {
+      res.status(204).send('');
+      return;
+    }
 
-    // Get system settings from Firestore
-    const settingsDoc = await admin.firestore()
-      .collection('system_settings')
-      .doc('config')
-      .get();
+    functions.logger.info('📊 Loading system settings (public HTTP access)');
+
+    const db = admin.firestore();
+    const settingsDoc = await db.collection('system_settings').doc('config').get();
 
     if (!settingsDoc.exists) {
-      // Return default values if no settings exist
+      functions.logger.warn('📋 No working hours settings found, returning defaults');
+      
+      // Return default v3.0 structured settings
+      const defaultSettings = {
+        version: '3.0',
+        fullTimeEmployee: {
+          workingHours: 8.0,
+          halfDayRange: { start: 0.0, end: 4.0 },
+          incompleteRange: { start: 6.0, end: 7.5 },
+          lateThresholdTime: '10:00'
+        },
+        partTimeEmployee: {
+          workingHours: 4.0,
+          incompleteRange: { start: 0.0, end: 3.5 }
+        },
+        consultantEmployee: {
+          workingHours: 6.0
+        }
+      };
+
+      res.status(200).json({
+        success: true,
+        settings: defaultSettings,
+        message: 'Default settings loaded'
+      });
+      return;
+    }
+
+    const settingsData = settingsDoc.data();
+    functions.logger.info('✅ Successfully retrieved working hours settings from Firestore');
+
+    res.status(200).json({
+      success: true,
+      settings: settingsData,
+      message: 'Settings retrieved successfully'
+    });
+
+  } catch (error) {
+    functions.logger.error('❌ Error in getWorkingHoursSettings:', error);
+    res.status(500).json({
+      success: false,
+      error: `Failed to get working hours settings: ${error}`
+    });
+  }
+});
+
+// Keep the original callable function as backup (truly public)
+export const getWorkingHoursSettings = functions.https.onCall(async (data, context) => {
+  try {
+    functions.logger.info('📊 Loading working hours settings (callable - public access)');
+
+    const db = admin.firestore();
+    const settingsDoc = await db.collection('system_settings').doc('config').get();
+
+    if (!settingsDoc.exists) {
+      functions.logger.warn('📋 No working hours settings found, returning defaults');
+      
+      const defaultSettings = {
+        version: '3.0',
+        fullTimeEmployee: {
+          workingHours: 8.0,
+          halfDayRange: { start: 0.0, end: 4.0 },
+          incompleteRange: { start: 6.0, end: 7.5 },
+          lateThresholdTime: '10:00'
+        },
+        partTimeEmployee: {
+          workingHours: 4.0,
+          incompleteRange: { start: 0.0, end: 3.5 }
+        },
+        consultantEmployee: {
+          workingHours: 6.0
+        }
+      };
+
       return {
         success: true,
-        settings: {
-          workingHours: {
-            fullTime: 8.0,
-            partTime: 6.0,
-            consultant: 4.0,
-          },
-          attendanceRanges: {
-            halfDay: { start: 0.0, end: 5.99 },
-            incomplete: { start: 6.0, end: 7.99 },
-            partTimeIncomplete: { start: 0.0, end: 4.0 },
-          },
-          attendanceSettings: {
-            lateThresholdMinutes: 15,
-            earlyDepartureThresholdMinutes: 15,
-            breakDurationMinutes: 60,
-            overtimeThresholdHours: 8.0,
-          }
-        }
+        settings: defaultSettings,
+        message: 'Default settings loaded'
       };
     }
 
-    const settings = settingsDoc.data();
-    
-    // Handle both new v2.0 format and legacy format
-    const isLegacyFormat = !settings!.version || settings!.version !== '2.0';
-    
-    if (isLegacyFormat) {
-      // Convert legacy format to new format
-      return {
-        success: true,
-        settings: {
-          workingHours: {
-            fullTime: settings!.workingHoursPerDay || 8.0,
-            partTime: settings!.partTimeWorkingHours || 6.0,
-            consultant: settings!.consultantWorkingHours || 4.0,
-          },
-          attendanceRanges: {
-            halfDay: settings!.halfDayRange || { start: 0.0, end: settings!.halfDayThreshold || 5.99 },
-            incomplete: settings!.incompleteHoursRange || { start: 6.0, end: settings!.incompleteHoursThreshold || 7.99 },
-            partTimeIncomplete: settings!.partTimeIncompleteRange || { start: 0.0, end: settings!.partTimeIncompleteThreshold || 4.0 },
-          },
-          attendanceSettings: {
-            lateThresholdMinutes: 15,
-            earlyDepartureThresholdMinutes: 15,
-            breakDurationMinutes: 60,
-            overtimeThresholdHours: settings!.workingHoursPerDay || 8.0,
-          }
-        }
-      };
-    }
+    const settingsData = settingsDoc.data();
+    functions.logger.info('✅ Successfully retrieved working hours settings from Firestore');
 
-    // Return new v2.0 format
     return {
       success: true,
-      settings: settings
+      settings: settingsData,
+      message: 'Settings retrieved successfully'
     };
 
   } catch (error) {
-    functions.logger.error('Error getting working hours settings:', error);
-    throw new functions.https.HttpsError('internal', 'Failed to get working hours settings');
+    functions.logger.error('❌ Error in getWorkingHoursSettings:', error);
+    
+    // Return default instead of throwing error
+    return {
+      success: true,
+      settings: {
+        version: '3.0',
+        fullTimeEmployee: {
+          workingHours: 8.0,
+          halfDayRange: { start: 0.0, end: 4.0 },
+          incompleteRange: { start: 6.0, end: 7.5 },
+          lateThresholdTime: '10:00'
+        },
+        partTimeEmployee: {
+          workingHours: 4.0,
+          incompleteRange: { start: 0.0, end: 3.5 }
+        },
+        consultantEmployee: {
+          workingHours: 6.0
+        }
+      },
+      message: 'Default settings loaded due to error'
+    };
   }
 });
 
@@ -3969,15 +4015,15 @@ export const updateWorkingHoursSettings = functions.https.onCall(async (data, co
     if (!fullTimeEmployee.halfDayRange || typeof fullTimeEmployee.halfDayRange !== 'object') {
       throw new functions.https.HttpsError('invalid-argument', 'Full-time halfDayRange is required and must be an object');
     }
-    if (typeof fullTimeEmployee.halfDayRange.end !== 'number' || fullTimeEmployee.halfDayRange.end < 0 || fullTimeEmployee.halfDayRange.end > 5.99) {
-      throw new functions.https.HttpsError('invalid-argument', `Half day threshold must be between 0-5:59 hours, received: ${fullTimeEmployee.halfDayRange.end}`);
+    if (typeof fullTimeEmployee.halfDayRange.end !== 'number' || fullTimeEmployee.halfDayRange.end < 0) {
+      throw new functions.https.HttpsError('invalid-argument', `Half day threshold must be a positive number, received: ${fullTimeEmployee.halfDayRange.end}`);
     }
 
     if (!fullTimeEmployee.incompleteRange || typeof fullTimeEmployee.incompleteRange !== 'object') {
       throw new functions.https.HttpsError('invalid-argument', 'Full-time incompleteRange is required and must be an object');
     }
-    if (typeof fullTimeEmployee.incompleteRange.end !== 'number' || fullTimeEmployee.incompleteRange.end < 6.0 || fullTimeEmployee.incompleteRange.end > 7.99) {
-      throw new functions.https.HttpsError('invalid-argument', `Incomplete hours threshold must be between 6:00-7:59 hours, received: ${fullTimeEmployee.incompleteRange.end}`);
+    if (typeof fullTimeEmployee.incompleteRange.end !== 'number' || fullTimeEmployee.incompleteRange.end < 0) {
+      throw new functions.https.HttpsError('invalid-argument', `Incomplete hours threshold must be a positive number, received: ${fullTimeEmployee.incompleteRange.end}`);
     }
 
     // Validate part-time employee settings
@@ -3991,8 +4037,8 @@ export const updateWorkingHoursSettings = functions.https.onCall(async (data, co
     if (!partTimeEmployee.incompleteRange || typeof partTimeEmployee.incompleteRange !== 'object') {
       throw new functions.https.HttpsError('invalid-argument', 'Part-time incompleteRange is required and must be an object');
     }
-    if (typeof partTimeEmployee.incompleteRange.end !== 'number' || partTimeEmployee.incompleteRange.end < 1 || partTimeEmployee.incompleteRange.end > 6) {
-      throw new functions.https.HttpsError('invalid-argument', `Part-time incomplete threshold must be between 1-6 hours, received: ${partTimeEmployee.incompleteRange.end}`);
+    if (typeof partTimeEmployee.incompleteRange.end !== 'number' || partTimeEmployee.incompleteRange.end < 0) {
+      throw new functions.https.HttpsError('invalid-argument', `Part-time incomplete threshold must be a positive number, received: ${partTimeEmployee.incompleteRange.end}`);
     }
 
     // Validate consultant employee settings
@@ -4100,50 +4146,109 @@ export const calculateAttendanceStatus = functions.https.onCall(async (data, con
       throw new functions.https.HttpsError('unauthenticated', 'User must be authenticated');
     }
 
-    const { workingHours } = data;
+    const { workingHours, employeeType, empCode } = data;
 
     if (typeof workingHours !== 'number' || workingHours < 0) {
       throw new functions.https.HttpsError('invalid-argument', 'Invalid working hours provided');
     }
 
-    // Get current working hours settings
+    // Get employee type if not provided
+    let finalEmployeeType = employeeType;
+    if (!finalEmployeeType && empCode) {
+      const employeeDoc = await admin.firestore()
+        .collection('users')
+        .where('empCode', '==', empCode)
+        .limit(1)
+        .get();
+      
+      if (!employeeDoc.empty) {
+        const employeeData = employeeDoc.docs[0].data();
+        finalEmployeeType = employeeData.employmentType || 'full_time';
+      }
+    }
+    
+    // Default to full_time if still not determined
+    finalEmployeeType = finalEmployeeType || 'full_time';
+
+    // Get current working hours settings (v3.0)
     const settingsDoc = await admin.firestore()
       .collection('system_settings')
       .doc('config')
       .get();
 
-    let settings = {
-      workingHoursPerDay: 8.0,
-      halfDayThreshold: 4.0,
-      incompleteHoursThreshold: 6.0,
-    };
-
-    if (settingsDoc.exists) {
-      const data = settingsDoc.data();
+    let settings;
+    if (settingsDoc.exists && settingsDoc.data()?.version === '3.0') {
+      settings = settingsDoc.data();
+    } else {
+      // Default v3.0 settings
       settings = {
-        workingHoursPerDay: data!.workingHoursPerDay || 8.0,
-        halfDayThreshold: data!.halfDayThreshold || 4.0,
-        incompleteHoursThreshold: data!.incompleteHoursThreshold || 6.0,
+        version: '3.0',
+        fullTimeEmployee: {
+          workingHours: 8.0,
+          halfDayRange: { start: 0.0, end: 4.0 },
+          incompleteRange: { start: 6.0, end: 7.5 },
+          lateThresholdTime: '10:00'
+        },
+        partTimeEmployee: {
+          workingHours: 4.0,
+          incompleteRange: { start: 0.0, end: 3.5 }
+        },
+        consultantEmployee: {
+          workingHours: 6.0
+        }
       };
     }
 
-    // Calculate attendance status based on corrected three-term system
+    // Calculate attendance status based on employee type
     let status = 'absent';
     let statusDetails = 'No attendance recorded';
+    let requiredHours = 8.0;
+    let overtimeHours = 0.0;
 
-    if (workingHours >= settings.workingHoursPerDay) {
-      status = 'present_full';
-      statusDetails = `Completed full day (${workingHours.toFixed(1)}h)`;
-    } else if (workingHours >= 6.0) { // Incomplete range: 6:00-7:59 
-      status = 'present_incomplete';
-      statusDetails = `Incomplete hours (${workingHours.toFixed(1)}h)`;
-    } else if (workingHours > 0) {
-      status = 'present_half';
-      statusDetails = `Half day completed (${workingHours.toFixed(1)}h)`;
+    if (finalEmployeeType === 'part_time') {
+      // Part-time: Only Complete or Incomplete (NO half-day)
+      requiredHours = settings.partTimeEmployee.workingHours;
+      const incompleteThreshold = settings.partTimeEmployee.incompleteRange.end;
+      
+      if (workingHours >= requiredHours) {
+        status = 'present_full';
+        statusDetails = `Completed part-time day (${workingHours.toFixed(1)}h)`;
+      } else if (workingHours > 0) {
+        status = 'incomplete';
+        statusDetails = `Incomplete part-time hours (${workingHours.toFixed(1)}h of ${requiredHours}h required)`;
+      }
+      
+    } else if (finalEmployeeType === 'consultant') {
+      // Consultant: Only Complete or Incomplete (NO half-day)
+      requiredHours = settings.consultantEmployee.workingHours;
+      
+      if (workingHours >= requiredHours) {
+        status = 'present_full';
+        statusDetails = `Completed consultant day (${workingHours.toFixed(1)}h)`;
+      } else if (workingHours > 0) {
+        status = 'incomplete';
+        statusDetails = `Incomplete consultant hours (${workingHours.toFixed(1)}h of ${requiredHours}h required)`;
+      }
+      
+    } else {
+      // Full-time: Complete, Incomplete, or Half-day
+      requiredHours = settings.fullTimeEmployee.workingHours;
+      const halfDayMax = settings.fullTimeEmployee.halfDayRange.end;
+      const incompleteMin = settings.fullTimeEmployee.incompleteRange.start;
+      const incompleteMax = settings.fullTimeEmployee.incompleteRange.end;
+      
+      if (workingHours >= requiredHours) {
+        status = 'present_full';
+        statusDetails = `Completed full day (${workingHours.toFixed(1)}h)`;
+        overtimeHours = Math.max(0, workingHours - requiredHours);
+      } else if (workingHours >= incompleteMin && workingHours < requiredHours) {
+        status = 'incomplete';
+        statusDetails = `Incomplete hours (${workingHours.toFixed(1)}h of ${requiredHours}h required)`;
+      } else if (workingHours > 0 && workingHours <= halfDayMax) {
+        status = 'present_half';
+        statusDetails = `Half day completed (${workingHours.toFixed(1)}h)`;
+      }
     }
-
-    // Calculate overtime if applicable
-    const overtimeHours = Math.max(0, workingHours - settings.workingHoursPerDay);
 
     return {
       success: true,
@@ -4152,10 +4257,14 @@ export const calculateAttendanceStatus = functions.https.onCall(async (data, con
         statusDetails,
         workingHours: parseFloat(workingHours.toFixed(2)),
         overtimeHours: parseFloat(overtimeHours.toFixed(2)),
-        requiredHours: settings.workingHoursPerDay,
+        requiredHours: requiredHours,
+        employeeType: finalEmployeeType,
         thresholds: {
-          halfDay: settings.halfDayThreshold,
-          incomplete: settings.incompleteHoursThreshold,
+          halfDayMax: finalEmployeeType === 'full_time' ? settings.fullTimeEmployee.halfDayRange.end : 0,
+          incompleteMin: finalEmployeeType === 'full_time' ? settings.fullTimeEmployee.incompleteRange.start : 0,
+          incompleteMax: finalEmployeeType === 'part_time' ? settings.partTimeEmployee.incompleteRange.end : 
+                       finalEmployeeType === 'full_time' ? settings.fullTimeEmployee.incompleteRange.end : 0,
+          requiredHours: requiredHours
         }
       }
     };
@@ -4188,26 +4297,46 @@ export const recalculateAllAttendanceStatuses = functions.https.onCall(async (da
       throw new functions.https.HttpsError('permission-denied', 'Only admins can recalculate attendance statuses');
     }
 
-    // Get current working hours settings
+    // Get current working hours settings (v3.0)
     const settingsDoc = await admin.firestore()
       .collection('system_settings')
       .doc('config')
       .get();
 
-    let settings = {
-      workingHoursPerDay: 8.0,
-      halfDayThreshold: 4.0,
-      incompleteHoursThreshold: 6.0,
-    };
-
-    if (settingsDoc.exists) {
-      const settingsData = settingsDoc.data();
+    let settings;
+    if (settingsDoc.exists && settingsDoc.data()?.version === '3.0') {
+      settings = settingsDoc.data();
+    } else {
+      // Default v3.0 settings
       settings = {
-        workingHoursPerDay: settingsData!.workingHoursPerDay || 8.0,
-        halfDayThreshold: settingsData!.halfDayThreshold || 4.0,
-        incompleteHoursThreshold: settingsData!.incompleteHoursThreshold || 6.0,
+        version: '3.0',
+        fullTimeEmployee: {
+          workingHours: 8.0,
+          halfDayRange: { start: 0.0, end: 4.0 },
+          incompleteRange: { start: 6.0, end: 7.5 },
+          lateThresholdTime: '10:00'
+        },
+        partTimeEmployee: {
+          workingHours: 4.0,
+          incompleteRange: { start: 0.0, end: 3.5 }
+        },
+        consultantEmployee: {
+          workingHours: 6.0
+        }
       };
     }
+
+    // Get all employees to determine their types
+    const employeesSnapshot = await admin.firestore()
+      .collection('users')
+      .where('role', '==', 'employee')
+      .get();
+    
+    const employeeTypeMap = new Map();
+    employeesSnapshot.forEach(doc => {
+      const data = doc.data();
+      employeeTypeMap.set(data.empCode, data.employmentType || 'full_time');
+    });
 
     // Get date range (last 30 days by default or specified range)
     const { startDate, endDate } = data;
@@ -4225,25 +4354,61 @@ export const recalculateAllAttendanceStatuses = functions.https.onCall(async (da
     let updatedCount = 0;
 
     attendanceSnapshot.forEach(doc => {
-      const data = doc.data();
-      const workingHours = data.workingHours || 0;
+      const attendanceData = doc.data();
+      const workingHours = attendanceData.workingHours || 0;
+      const empCode = attendanceData.empCode;
+      
+      // Get employee type
+      const employeeType = employeeTypeMap.get(empCode) || 'full_time';
 
-      // Calculate new status
+      // Calculate new status based on employee type
       let status = 'absent';
       let statusDetails = 'No attendance recorded';
+      let requiredHours = 8.0;
+      let overtimeHours = 0.0;
 
-      if (workingHours >= settings.workingHoursPerDay) {
-        status = 'present_full';
-        statusDetails = `Completed full day (${workingHours.toFixed(1)}h)`;
-      } else if (workingHours >= 6.0) { // Incomplete range: 6:00-7:59
-        status = 'present_incomplete';
-        statusDetails = `Incomplete hours (${workingHours.toFixed(1)}h)`;
-      } else if (workingHours > 0) { // Half Day range: 0:00-5:59
-        status = 'present_half';
-        statusDetails = `Half day completed (${workingHours.toFixed(1)}h)`;
+      if (employeeType === 'part_time') {
+        // Part-time: Only Complete or Incomplete (NO half-day)
+        requiredHours = settings.partTimeEmployee.workingHours;
+        
+        if (workingHours >= requiredHours) {
+          status = 'present_full';
+          statusDetails = `Completed part-time day (${workingHours.toFixed(1)}h)`;
+        } else if (workingHours > 0) {
+          status = 'incomplete';
+          statusDetails = `Incomplete part-time hours (${workingHours.toFixed(1)}h of ${requiredHours}h required)`;
+        }
+        
+      } else if (employeeType === 'consultant') {
+        // Consultant: Only Complete or Incomplete (NO half-day)
+        requiredHours = settings.consultantEmployee.workingHours;
+        
+        if (workingHours >= requiredHours) {
+          status = 'present_full';
+          statusDetails = `Completed consultant day (${workingHours.toFixed(1)}h)`;
+        } else if (workingHours > 0) {
+          status = 'incomplete';
+          statusDetails = `Incomplete consultant hours (${workingHours.toFixed(1)}h of ${requiredHours}h required)`;
+        }
+        
+      } else {
+        // Full-time: Complete, Incomplete, or Half-day
+        requiredHours = settings.fullTimeEmployee.workingHours;
+        const halfDayMax = settings.fullTimeEmployee.halfDayRange.end;
+        const incompleteMin = settings.fullTimeEmployee.incompleteRange.start;
+        
+        if (workingHours >= requiredHours) {
+          status = 'present_full';
+          statusDetails = `Completed full day (${workingHours.toFixed(1)}h)`;
+          overtimeHours = Math.max(0, workingHours - requiredHours);
+        } else if (workingHours >= incompleteMin && workingHours < requiredHours) {
+          status = 'incomplete';
+          statusDetails = `Incomplete hours (${workingHours.toFixed(1)}h of ${requiredHours}h required)`;
+        } else if (workingHours > 0 && workingHours <= halfDayMax) {
+          status = 'present_half';
+          statusDetails = `Half day completed (${workingHours.toFixed(1)}h)`;
+        }
       }
-
-      const overtimeHours = Math.max(0, workingHours - settings.workingHoursPerDay);
 
       // Update the document
       batch.update(doc.ref, {

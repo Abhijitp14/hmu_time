@@ -13,6 +13,7 @@ import 'admin_users_list_screen.dart';
 import 'holiday_management_screen.dart';
 import 'system_settings_screen.dart';
 import 'reports_screen.dart';
+import 'today_attendance_screen.dart';
 
 class AdminDashboardScreen extends StatefulWidget {
   final AppUser user;
@@ -264,6 +265,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
     
     if (role == UserRole.admin) {
       actions.addAll([
+        QuickAction('Today\'s Attendance', Icons.how_to_reg, AppColors.success),
         QuickAction('Add Employee', Icons.person_add, AppColors.success),
         QuickAction('Add HR/Manager', Icons.admin_panel_settings, AppColors.warning),
         QuickAction('Employee List', Icons.people, AppColors.primary),
@@ -275,10 +277,10 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
       ]);
     } else if (role == UserRole.hr || role == UserRole.manager) {
       actions.addAll([
+        QuickAction('Today\'s Attendance', Icons.how_to_reg, AppColors.success),
         QuickAction('Add Employee', Icons.person_add, AppColors.success),
         QuickAction('Employee List', Icons.people, AppColors.primary),
         QuickAction('Holiday Management', Icons.event, AppColors.info),
-        QuickAction('Attendance', Icons.access_time, AppColors.success),
         QuickAction('Leave Requests', Icons.event_note, AppColors.warning),
       ]);
     }
@@ -620,6 +622,14 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
           context,
           MaterialPageRoute(
             builder: (context) => SystemSettingsScreen(user: widget.user),
+          ),
+        );
+        break;
+      case 'Today\'s Attendance':
+        Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (context) => const TodayAttendanceScreen(),
           ),
         );
         break;

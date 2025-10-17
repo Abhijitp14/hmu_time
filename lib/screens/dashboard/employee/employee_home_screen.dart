@@ -21,13 +21,14 @@ class _EmployeeHomeScreenState extends State<EmployeeHomeScreen> {
   final BiometricService _biometricService = BiometricService();
   final WorkingHoursService _workingHoursService = WorkingHoursService();
   List<BiometricRecord> _todayPunches = [];
-  bool _isLoadingToday = false;
+  bool _isLoadingToday = true; // Start with loading state
   bool _isSyncing = false;
   String? _todayCheckIn;
   String? _todayCheckOut;
 
   DateTime? _lastSyncTime;
   DateTime? _checkInDateTime; // Store actual check-in DateTime for late calculation
+  Set<String> _syncedMonths = {}; // Track which months have been synced
   double _workingHours = 0.0; // Store working hours as decimal for calculation
   String _workStatus = 'Total Hours'; // Store work status text
   
@@ -54,16 +55,24 @@ class _EmployeeHomeScreenState extends State<EmployeeHomeScreen> {
   }
 
   Future<void> _initializeData() async {
-    // Load working hours settings first
-    await _loadWorkingHoursSettings();
-    // Load existing data
-    await _loadTodayPunches();
-    
-    // Only auto-sync on app load if we have never synced before (first time use)
-    // Remove aggressive auto-sync on every app load to prevent constant loading
-    if (_isSelectedDateToday() && !_isSyncing && _lastSyncTime == null) {
-      debugPrint('🚀 First time load: Auto-syncing to get initial punch data...');
-      await _syncAttendance(isAutoSync: true);
+    // Set loading state from the beginning
+    if (mounted) {
+      setState(() => _isLoadingToday = true);
+    }
+
+    try {
+      // Load working hours settings first
+      await _loadWorkingHoursSettings();
+      // Load existing data
+      await _loadTodayPunches();
+      
+      // The loadTodayPunches already handles syncing if no data is found
+      // No need for additional sync logic here
+    } catch (e) {
+      debugPrint('❌ Error during initialization: $e');
+      _showSnackBar('Failed to load initial data: $e', isError: true);
+    } finally {
+      // Loading state is handled in _loadTodayPunches, so don't set it here
     }
   }
 
@@ -173,16 +182,15 @@ class _EmployeeHomeScreenState extends State<EmployeeHomeScreen> {
       });
       // Reload data for the selected month
       _loadTodayPunches();
-
     }
   }
 
   void _onDateSelected(DateTime selectedDate) {
     setState(() {
       _selectedDate = selectedDate;
+      // Recalculate times for the selected date (no loading needed, just filtering existing data)
+      _calculateTodayTimes();
     });
-    // Reload data to show selected date's details
-    _calculateTodayTimes();
   }
 
   Future<void> _loadTodayPunches() async {
@@ -197,10 +205,10 @@ class _EmployeeHomeScreenState extends State<EmployeeHomeScreen> {
     }
 
     try {
-      if (mounted) {
+      // Ensure loading state is set (only set if not already loading)
+      if (mounted && !_isLoadingToday) {
         setState(() => _isLoadingToday = true);
       }
-      debugPrint('⏳ Loading state set to true');
       
       // Use selected month for data loading
       final today = DateTime.now();
@@ -214,88 +222,120 @@ class _EmployeeHomeScreenState extends State<EmployeeHomeScreen> {
       
       debugPrint('📅 Date range: ${fromDate.toString()} to ${toDate.toString()}');
       
-      BiometricSyncResult result;
+      // First try to get stored records (faster)
+      debugPrint('🔍 Attempting to get stored records...');
+      BiometricSyncResult result = await _biometricService.getStoredBiometricRecords(
+        empCode: widget.user.empCode!,
+        fromDate: fromDate,
+        toDate: toDate,
+      );
       
-      try {
-        // First try to get stored records (faster)
-        debugPrint('🔍 Attempting to get stored records...');
-        result = await _biometricService.getStoredBiometricRecords(
+      debugPrint('📊 Stored records result: success=${result.success}, recordCount=${result.records.length}');
+      
+      // Create month key for tracking
+      final monthKey = '${_selectedMonth.year}-${_selectedMonth.month.toString().padLeft(2, '0')}';
+      
+      // Check if we need to sync based on different scenarios
+      bool shouldSync = false;
+      String syncReason = '';
+      
+      if (!result.success || result.records.isEmpty) {
+        // No stored data at all for this month
+        shouldSync = true;
+        syncReason = 'No stored data found for $monthKey';
+      } else if (isCurrentMonth) {
+        // For current month, always sync if it's today to get latest punch data
+        final today = DateTime.now();
+        final todayRecords = result.records.where((record) =>
+          record.dateTime.year == today.year &&
+          record.dateTime.month == today.month &&
+          record.dateTime.day == today.day
+        ).toList();
+        
+        if (todayRecords.isEmpty) {
+          // No data for today - always sync
+          shouldSync = true;
+          syncReason = 'No data for today (${today.day}/${today.month})';
+        } else {
+          // Check if we should sync for latest punch data
+          final now = DateTime.now();
+          final lastSyncHours = _lastSyncTime != null ? 
+              now.difference(_lastSyncTime!).inHours : 999;
+          
+          // Sync if it's during work hours (6 AM to 8 PM) and haven't synced in last hour
+          final isWorkHours = now.hour >= 6 && now.hour <= 20;
+          
+          if (isWorkHours && lastSyncHours >= 1) {
+            shouldSync = true;
+            syncReason = 'Syncing for latest punch data (last sync: ${lastSyncHours}h ago)';
+          } else if (lastSyncHours >= 6) {
+            // Always sync if haven't synced in 6+ hours
+            shouldSync = true;
+            syncReason = 'Long time since last sync (${lastSyncHours}h ago)';
+          }
+        }
+      } else {
+        // For previous months, check if month was ever synced
+        if (!_syncedMonths.contains(monthKey)) {
+          shouldSync = true;
+          syncReason = 'Month $monthKey never synced before';
+        }
+      }
+      
+      if (shouldSync) {
+        debugPrint('🔄 Syncing data: $syncReason');
+        
+        final syncResult = await _biometricService.syncBiometricData(
           empCode: widget.user.empCode!,
           fromDate: fromDate,
           toDate: toDate,
         );
         
-        debugPrint('📊 Stored records result: success=${result.success}, recordCount=${result.records.length}');
+        debugPrint('🔄 Sync result: success=${syncResult.success}, recordsProcessed=${syncResult.recordsProcessed}');
         
-        // Be much less aggressive about syncing - only sync when really necessary
-        final shouldSync = !result.success || 
-                          (result.records.isEmpty && _lastSyncTime == null); // Only sync if no data and never synced
-                          
-        if (shouldSync) {
-          debugPrint('🔄 No stored data found or missing today\'s data, attempting sync...');
-          final syncResult = await _biometricService.syncBiometricData(
+        if (syncResult.success) {
+          // Mark this month as synced
+          _syncedMonths.add(monthKey);
+          
+          // Update last sync time for current month
+          if (isCurrentMonth) {
+            _lastSyncTime = DateTime.now();
+          }
+          
+          // Wait for Firestore consistency
+          await Future.delayed(const Duration(seconds: 2));
+          
+          // Get the synced data
+          result = await _biometricService.getStoredBiometricRecords(
             empCode: widget.user.empCode!,
             fromDate: fromDate,
             toDate: toDate,
           );
           
-          debugPrint('🔄 Sync result: success=${syncResult.success}, recordsProcessed=${syncResult.recordsProcessed}');
-          
-          // After successful sync, add delay and reload the stored data to update UI
-          if (syncResult.success) {
-            debugPrint('⏱️ Sync successful, waiting 2 seconds for Firestore consistency...');
-            // Wait for Firestore to be consistent after sync
-            await Future.delayed(const Duration(seconds: 2));
-            
-            debugPrint('🔍 Retrying stored records after sync...');
-            result = await _biometricService.getStoredBiometricRecords(
-              empCode: widget.user.empCode!,
-              fromDate: fromDate,
-              toDate: toDate,
-            );
-            
-            debugPrint('📊 After sync stored records result: success=${result.success}, recordCount=${result.records.length}');
-            
-            // If still no data after retry, show error
-            if (!result.success || result.records.isEmpty) {
-              debugPrint('⚠️ Still no data after sync retry');
-              _showSnackBar('Data synced but not immediately available. Please try refreshing.', isError: true);
-            }
-          } else {
-            debugPrint('❌ Sync failed, using sync result directly');
-            result = syncResult;
-          }
+          debugPrint('📊 After sync for $monthKey: success=${result.success}, recordCount=${result.records.length}');
+        } else {
+          result = syncResult;
         }
-      } catch (e) {
-        debugPrint('❌ Exception during data fetch: $e');
-        // Create empty result on error
-        result = BiometricSyncResult(
-          success: false, 
-          message: 'Failed to load data: $e', 
-          recordsProcessed: 0,
-          records: []
-        );
+      } else {
+        debugPrint('✅ Using stored data - no sync needed for $monthKey (${result.records.length} records)');
       }
 
-      if (result.success) {
-        debugPrint('✅ Data loaded successfully, processing ${result.records.length} records');
-        if (mounted) {
-          setState(() {
-            // Clear existing data first to prevent duplicates
-            _todayPunches.clear();
+      // Process the data
+      if (mounted) {
+        setState(() {
+          _todayPunches.clear();
+          if (result.success && result.records.isNotEmpty) {
             _todayPunches = _removeDuplicateRecords(result.records);
-            _calculateTodayTimes();
-          });
-        }
-        debugPrint('📋 Today punches after processing: ${_todayPunches.length}');
-      } else {
-        debugPrint('❌ Failed to load data: ${result.message}');
-        _showSnackBar('Failed to load data: ${result.message}', isError: true);
+          }
+          _calculateTodayTimes();
+        });
       }
+      
+      debugPrint('📋 Final processed punches: ${_todayPunches.length}');
+      
     } catch (e) {
-      // Handle errors and show feedback to user
       debugPrint('❌ Exception in _loadTodayPunches: $e');
-      _showSnackBar('Failed to load today\'s data: ${e.toString()}', isError: true);
+      _showSnackBar('Failed to load data: ${e.toString()}', isError: true);
     } finally {
       debugPrint('🏁 _loadTodayPunches finished, setting loading to false');
       if (mounted) {
@@ -322,12 +362,14 @@ class _EmployeeHomeScreenState extends State<EmployeeHomeScreen> {
       punch.dateTime.day == _selectedDate.day
     ).toList();
     
+    // Always initialize default values first
+    _todayCheckIn = null;
+    _todayCheckOut = null;
+    _checkInDateTime = null;
+    _workingHours = 0.0;
+    _workStatus = 'Total Hours';
+    
     if (selectedDateOnly.isEmpty) {
-      _todayCheckIn = null;
-      _todayCheckOut = null;
-      _checkInDateTime = null;
-      _workingHours = 0.0;
-      _workStatus = 'Total Hours';
       return;
     }
 
@@ -372,9 +414,14 @@ class _EmployeeHomeScreenState extends State<EmployeeHomeScreen> {
       _workingHours = 0.0;
       
       if (inPunches.isNotEmpty) {
-        // Has check-in but no check-out - mark as Half Day
-        _workStatus = 'Half Day';
-        print('⏱️ Working Hours Debug: Has check-in but no check-out - Status set to Half Day');
+        // Has check-in but no check-out - apply employee type-specific logic
+        if (widget.user.isPartTimeEmployee || widget.user.isConsultantEmployee) {
+          _workStatus = 'Incomplete';
+          print('⏱️ Working Hours Debug: ${widget.user.isPartTimeEmployee ? 'Part-time' : 'Consultant'} employee with check-in but no check-out - Status set to Incomplete');
+        } else {
+          _workStatus = 'Half Day';
+          print('⏱️ Working Hours Debug: Full-time employee with check-in but no check-out - Status set to Half Day');
+        }
       } else {
         // No check-in and no check-out
         _workStatus = 'Total Hours';
@@ -415,20 +462,20 @@ class _EmployeeHomeScreenState extends State<EmployeeHomeScreen> {
 
   void _calculateWorkStatus() {
     if (widget.user.isPartTimeEmployee) {
-      // Part-time employee logic: Use dynamic thresholds from admin settings
+      // Part-time employee logic: Only Full Day or Incomplete (no half day concepts)
       if (_workingHours >= _requiredHours) {
         _workStatus = 'Full Day';
-      } else if (_workingHours > 0 && _workingHours <= _incompleteThreshold) {
+      } else if (_workingHours > 0) {
         _workStatus = 'Incomplete';
-      } else if (_workingHours > _incompleteThreshold && _workingHours < _requiredHours) {
-        _workStatus = 'Full Day'; // Hours between incomplete end and required hours = Full Day
       } else {
         _workStatus = 'Total Hours';
       }
     } else if (widget.user.isConsultantEmployee) {
-      // Consultant employee logic: Only Full Day or Total Hours (no partial/half day concepts)
+      // Consultant employee logic: Only Full Day or Incomplete (no half day concepts)
       if (_workingHours >= _requiredHours) {
         _workStatus = 'Full Day';
+      } else if (_workingHours > 0) {
+        _workStatus = 'Incomplete';
       } else {
         _workStatus = 'Total Hours';
       }
@@ -559,6 +606,10 @@ class _EmployeeHomeScreenState extends State<EmployeeHomeScreen> {
 
           if (result.success) {
             successfulSyncs++;
+            
+            // Mark this month as synced
+            final monthKey = '${month.year}-${month.month.toString().padLeft(2, '0')}';
+            _syncedMonths.add(monthKey);
           }
           
           // Small delay between syncs to avoid overwhelming the API
@@ -649,9 +700,15 @@ class _EmployeeHomeScreenState extends State<EmployeeHomeScreen> {
               debugPrint('📱 Pull-to-refresh on current day: Syncing to get latest punch data...');
               await _syncAttendance(isAutoSync: true);
             } else {
-              // For other dates or recent sync, just load existing data
-              debugPrint('📱 Pull-to-refresh: Loading existing data (sync not needed or recent sync)');
+              // For other dates or recent sync, just reload existing data without showing loading
+              debugPrint('📱 Pull-to-refresh: Reloading existing data (sync not needed or recent sync)');
+              // Don't show loading indicator for refresh, just reload data
+              final currentLoadingState = _isLoadingToday;
               await _loadTodayPunches();
+              // Restore loading state to prevent UI flickering during refresh
+              if (mounted && !currentLoadingState) {
+                setState(() => _isLoadingToday = false);
+              }
             }
           },
           child: SingleChildScrollView(
@@ -1004,7 +1061,7 @@ class _EmployeeHomeScreenState extends State<EmployeeHomeScreen> {
                         'Check In',
                         _todayCheckIn ?? '--:--',
                         _todayCheckIn != null 
-                            ? (_isCheckInLate() ? 'Late' : 'On Time') 
+                            ? (_isCheckInLate() ? 'Late Mark' : 'On Time') 
                             : 'Not Checked',
                         Icons.login,
                         _todayCheckIn != null 

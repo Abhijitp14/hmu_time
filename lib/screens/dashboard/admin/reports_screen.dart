@@ -1,9 +1,11 @@
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:cloud_functions/cloud_functions.dart';
 import 'package:intl/intl.dart';
 
 import '../../../models/user_model.dart';
 import '../../../services/employee_service.dart';
+import 'employee_attendance_detail_screen.dart';
 
 class ReportsScreen extends StatefulWidget {
   final AppUser user;
@@ -22,9 +24,9 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
   final FirebaseFirestore _firestore = FirebaseFirestore.instance;
   final EmployeeService _employeeService = EmployeeService();
   
-  // Date Range Selection
-  DateTime _startDate = DateTime.now().subtract(const Duration(days: 30));
-  DateTime _endDate = DateTime.now();
+  // Month Selection (current month and past 3 months)
+  late DateTime _selectedMonth;
+  late List<DateTime> _availableMonths;
   
   // Report Data
   List<AttendanceReportData> _attendanceData = [];
@@ -41,8 +43,28 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
   void initState() {
     super.initState();
     _tabController = TabController(length: 3, vsync: this);
-    _loadEmployees();
-    _loadAllReports();
+    _setupAvailableMonths();
+    _initializeReports();
+  }
+
+  Future<void> _initializeReports() async {
+    await _loadEmployees();
+    await _loadAllReports();
+  }
+
+  void _setupAvailableMonths() {
+    _availableMonths = [];
+    final now = DateTime.now();
+    
+    // Add current month and past 3 months - normalize to first day of month
+    for (int i = 0; i < 4; i++) {
+      final targetDate = DateTime(now.year, now.month - i, 1);
+      final month = DateTime(targetDate.year, targetDate.month, 1);
+      _availableMonths.add(month);
+    }
+    
+    // Set the selected month to the first available month (current month)
+    _selectedMonth = _availableMonths.first;
   }
 
   @override
@@ -54,7 +76,15 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
   Future<void> _loadEmployees() async {
     try {
       final employeesData = await _employeeService.getEmployees();
-      final employees = employeesData.map((data) => AppUser.fromJson(data)).toList();
+      final employees = employeesData.map((data) {
+        // Fix the ID mapping issue - Firebase returns 'uid' but AppUser expects 'id'
+        final correctedData = Map<String, dynamic>.from(data);
+        if (correctedData['uid'] != null && (correctedData['id'] == null || correctedData['id'] == '')) {
+          correctedData['id'] = correctedData['uid'];
+        }
+        return AppUser.fromJson(correctedData);
+      }).toList();
+      
       setState(() => _employees = employees);
     } catch (e) {
       _showMessage('Failed to load employees: $e', isError: true);
@@ -62,6 +92,8 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
   }
 
   Future<void> _loadAllReports() async {
+    if (_employees.isEmpty) return;
+    
     await Future.wait([
       _loadAttendanceReport(),
       _loadLeaveReport(),
@@ -72,40 +104,29 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
   Future<void> _loadAttendanceReport() async {
     setState(() => _isLoadingAttendance = true);
     try {
-      Query query = _firestore.collection('attendance')
-          .where('date', isGreaterThanOrEqualTo: _startDate)
-          .where('date', isLessThanOrEqualTo: _endDate);
-      
-      if (_selectedEmployeeId != null) {
-        query = query.where('employeeId', isEqualTo: _selectedEmployeeId);
-      }
-
-      final snapshot = await query.get();
+      final dateRange = _monthDateRange;
       final data = <String, AttendanceReportData>{};
-
-      for (final doc in snapshot.docs) {
-        final docData = doc.data() as Map<String, dynamic>;
-        final employeeId = docData['employeeId'] as String;
-        final date = (docData['date'] as Timestamp).toDate();
-
-        final isPresent = docData['isPresent'] ?? false;
-        final isLate = docData['isLate'] ?? false;
-        final workingHours = (docData['workingHours'] ?? 0.0).toDouble();
-
-        final key = _selectedEmployeeId != null ? employeeId : '$employeeId-${DateFormat('yyyy-MM').format(date)}';
+      
+      // Get employees to process based on selection
+      final employeesToProcess = _selectedEmployeeId != null 
+          ? _employees.where((e) => e.id == _selectedEmployeeId).toList()
+          : _employees.toList();
+      
+      if (employeesToProcess.isEmpty) {
+        setState(() {
+          _attendanceData = [];
+          _isLoadingAttendance = false;
+        });
+        return;
+      }
+      
+      for (final employee in employeesToProcess) {
+        final empCode = employee.empCode;
         
-        if (!data.containsKey(key)) {
-          final employee = _employees.firstWhere((e) => e.id == employeeId, orElse: () => AppUser(
-            id: employeeId,
-            name: 'Unknown Employee',
-            email: '',
-            role: UserRole.employee,
-            createdAt: DateTime.now(),
-          ));
-          
-          data[key] = AttendanceReportData(
+        if (empCode == null) {
+          // Create zero-data entry for employees without empCode
+          data[employee.id] = AttendanceReportData(
             employee: employee,
-            period: _selectedEmployeeId != null ? 'Selected Period' : DateFormat('MMM yyyy').format(date),
             totalDays: 0,
             presentDays: 0,
             absentDays: 0,
@@ -113,29 +134,165 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
             totalWorkingHours: 0.0,
             averageWorkingHours: 0.0,
             attendancePercentage: 0.0,
+            period: DateFormat('MMM yyyy').format(_selectedMonth),
           );
+          continue;
         }
-
-        data[key]!.totalDays++;
-        if (isPresent) {
-          data[key]!.presentDays++;
-          data[key]!.totalWorkingHours += workingHours;
-        } else {
-          data[key]!.absentDays++;
+        
+        try {
+          // Get attendance data for this employee
+          final attendanceDoc = await _firestore
+              .collection('attendance')
+              .doc(empCode)
+              .get();
+          
+          if (!attendanceDoc.exists) {
+            // Create zero-data entry for employees without attendance data
+            data[employee.id] = AttendanceReportData(
+              employee: employee,
+              totalDays: 0,
+              presentDays: 0,
+              absentDays: 0,
+              lateDays: 0,
+              totalWorkingHours: 0.0,
+              averageWorkingHours: 0.0,
+              attendancePercentage: 0.0,
+              period: DateFormat('MMM yyyy').format(_selectedMonth),
+            );
+            continue;
+          }
+          
+          // Get active months for this employee
+          final attendanceData = attendanceDoc.data()!;
+          final activeMonths = (attendanceData['activeMonths'] as List<dynamic>?)?.cast<String>() ?? [];
+          
+          int totalDays = 0;
+          int presentDays = 0;
+          int absentDays = 0;
+          int lateDays = 0;
+          double totalWorkingHours = 0.0;
+          
+          // Process each month within the date range
+          for (final monthCollection in activeMonths) {
+            // Get documents from this month collection
+            final monthDocs = await _firestore
+                .collection('attendance')
+                .doc(empCode)
+                .collection(monthCollection)
+                .get();
+            
+            for (final dayDoc in monthDocs.docs) {
+              final dayData = dayDoc.data();
+              
+              // Parse the date from the document
+              final dateStr = dayData['date'] as String?;
+              if (dateStr == null) continue;
+              
+              // Parse date format: "16-10-2025"
+              final dateParts = dateStr.split('-');
+              if (dateParts.length != 3) continue;
+              
+              final day = int.tryParse(dateParts[0]);
+              final month = int.tryParse(dateParts[1]);
+              final year = int.tryParse(dateParts[2]);
+              
+              if (day == null || month == null || year == null) continue;
+              
+              final recordDate = DateTime(year, month, day);
+              
+              // Check if this record falls within our date range
+              if (recordDate.isBefore(dateRange.start) || recordDate.isAfter(dateRange.end)) {
+                continue;
+              }
+              
+              totalDays++;
+              
+              // Process punches to determine attendance status
+              final punches = (dayData['punches'] as List<dynamic>?)?.cast<Map<String, dynamic>>() ?? [];
+              
+              if (punches.isNotEmpty) {
+                presentDays++;
+                
+                // Calculate working hours from punches
+                DateTime? checkIn;
+                DateTime? checkOut;
+                
+                for (final punch in punches) {
+                  final type = punch['type'] as String?;
+                  final datetime = punch['datetime'] as String?;
+                  
+                  if (datetime != null) {
+                    try {
+                      // Parse datetime: "16/10/2025 09:30"
+                      final parts = datetime.split(' ');
+                      if (parts.length >= 2) {
+                        final datePart = parts[0]; // "16/10/2025"
+                        final timePart = parts[1]; // "09:30"
+                        
+                        final dateParts = datePart.split('/');
+                        final timeParts = timePart.split(':');
+                        
+                        if (dateParts.length == 3 && timeParts.length >= 2) {
+                          final punchDay = int.parse(dateParts[0]);
+                          final punchMonth = int.parse(dateParts[1]);
+                          final punchYear = int.parse(dateParts[2]);
+                          final hour = int.parse(timeParts[0]);
+                          final minute = int.parse(timeParts[1]);
+                          
+                          final punchTime = DateTime(punchYear, punchMonth, punchDay, hour, minute);
+                          
+                          if (type == 'IN' && checkIn == null) {
+                            checkIn = punchTime;
+                          } else if (type == 'OUT') {
+                            checkOut = punchTime;
+                          }
+                        }
+                      }
+                    } catch (e) {
+                      // Skip invalid punch times
+                    }
+                  }
+                }
+                
+                // Calculate working hours
+                if (checkIn != null && checkOut != null) {
+                  final workingMinutes = checkOut.difference(checkIn).inMinutes;
+                  totalWorkingHours += workingMinutes / 60.0;
+                }
+                
+                // Check if late (after 9:00 AM)
+                if (checkIn != null) {
+                  final standardTime = DateTime(checkIn.year, checkIn.month, checkIn.day, 9, 0);
+                  if (checkIn.isAfter(standardTime)) {
+                    lateDays++;
+                  }
+                }
+              } else {
+                absentDays++;
+              }
+            }
+          }
+          
+          // Create report data for this employee
+          if (totalDays > 0) {
+            final key = _selectedEmployeeId != null ? employee.id : '${employee.id}-${DateFormat('yyyy-MM').format(DateTime.now())}';
+            
+            data[key] = AttendanceReportData(
+              employee: employee,
+              period: _selectedEmployeeId != null ? 'Selected Period' : DateFormat('MMM yyyy').format(DateTime.now()),
+              totalDays: totalDays,
+              presentDays: presentDays,
+              absentDays: absentDays,
+              lateDays: lateDays,
+              totalWorkingHours: totalWorkingHours,
+              averageWorkingHours: presentDays > 0 ? totalWorkingHours / presentDays : 0.0,
+              attendancePercentage: totalDays > 0 ? (presentDays / totalDays) * 100 : 0.0,
+            );
+          }
+          
+        } catch (e) {
+          // Skip employee if error processing their data
         }
-        if (isLate) {
-          data[key]!.lateDays++;
-        }
-      }
-
-      // Calculate percentages and averages
-      for (final reportData in data.values) {
-        reportData.attendancePercentage = reportData.totalDays > 0 
-            ? (reportData.presentDays / reportData.totalDays) * 100 
-            : 0.0;
-        reportData.averageWorkingHours = reportData.presentDays > 0 
-            ? reportData.totalWorkingHours / reportData.presentDays 
-            : 0.0;
       }
 
       setState(() => _attendanceData = data.values.toList()..sort((a, b) => b.attendancePercentage.compareTo(a.attendancePercentage)));
@@ -149,34 +306,37 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
   Future<void> _loadLeaveReport() async {
     setState(() => _isLoadingLeaves = true);
     try {
-      Query query = _firestore.collection('leaves')
-          .where('startDate', isGreaterThanOrEqualTo: _startDate)
-          .where('startDate', isLessThanOrEqualTo: _endDate);
-      
-      if (_selectedEmployeeId != null) {
-        query = query.where('employeeId', isEqualTo: _selectedEmployeeId);
-      }
-
-      final snapshot = await query.get();
+      final dateRange = _monthDateRange;
       final data = <String, LeaveReportData>{};
-
-      for (final doc in snapshot.docs) {
-        final docData = doc.data() as Map<String, dynamic>;
-        final employeeId = docData['employeeId'] as String;
-        final leaveType = docData['leaveType'] as String;
-        final status = docData['status'] as String;
-        final days = (docData['days'] ?? 1).toDouble();
-
-        if (!data.containsKey(employeeId)) {
-          final employee = _employees.firstWhere((e) => e.id == employeeId, orElse: () => AppUser(
-            id: employeeId,
-            name: 'Unknown Employee',
-            email: '',
-            role: UserRole.employee,
-            createdAt: DateTime.now(),
-          ));
-          
-          data[employeeId] = LeaveReportData(
+      
+      // Get employees to process based on selection
+      final employeesToProcess = _selectedEmployeeId != null 
+          ? _employees.where((e) => e.id == _selectedEmployeeId).toList()
+          : _employees.toList();
+      
+      if (employeesToProcess.isEmpty) {
+        setState(() {
+          _leaveData = [];
+          _isLoadingLeaves = false;
+        });
+        return;
+      }
+      
+      // Define leave type collections
+      final leaveCollections = [
+        'sick_leave_requests',
+        'casual_leave_requests', 
+        'paid_leave_requests',
+        'optional_holiday_requests',
+        'lwp_requests',
+        'official_leave_requests'
+      ];
+      
+      for (final employee in employeesToProcess) {
+        final employeeUid = employee.id;
+        
+        if (!data.containsKey(employeeUid)) {
+          data[employeeUid] = LeaveReportData(
             employee: employee,
             casualLeaves: 0,
             sickLeaves: 0,
@@ -188,41 +348,82 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
             rejectedLeaves: 0,
           );
         }
-
-        final leaveData = data[employeeId]!;
-        leaveData.totalLeaves += days;
-
-        switch (leaveType.toLowerCase()) {
-          case 'casual':
-          case 'casual leave':
-            leaveData.casualLeaves += days;
-            break;
-          case 'sick':
-          case 'sick leave':
-            leaveData.sickLeaves += days;
-            break;
-          case 'paid':
-          case 'paid leave':
-            leaveData.paidLeaves += days;
-            break;
-          case 'optional':
-          case 'optional holiday':
-            leaveData.optionalHolidays += days;
-            break;
-        }
-
-        switch (status.toLowerCase()) {
-          case 'approved':
-            leaveData.approvedLeaves += days;
-            break;
-          case 'pending':
-            leaveData.pendingLeaves += days;
-            break;
-          case 'rejected':
-            leaveData.rejectedLeaves += days;
-            break;
+        
+        final leaveData = data[employeeUid]!;
+        
+        // Process each leave type collection
+        for (final collectionName in leaveCollections) {
+          try {
+            final leaveRequests = await _firestore
+                .collection(collectionName)
+                .where('userId', isEqualTo: employeeUid)
+                .get();
+            
+            for (final doc in leaveRequests.docs) {
+              final requestData = doc.data();
+              
+              // Parse dates
+              final startDateTimestamp = requestData['startDate'] as Timestamp?;
+              final endDateTimestamp = requestData['endDate'] as Timestamp?;
+              
+              if (startDateTimestamp == null || endDateTimestamp == null) continue;
+              
+              final startDate = startDateTimestamp.toDate();
+              final endDate = endDateTimestamp.toDate();
+              
+              // Check if leave falls within our date range
+              if (startDate.isAfter(dateRange.end) || endDate.isBefore(dateRange.start)) {
+                continue;
+              }
+              
+              final status = requestData['status'] as String? ?? 'pending';
+              final totalDays = (requestData['totalDays'] ?? 1).toDouble();
+              
+              // Count by leave type
+              switch (collectionName) {
+                case 'sick_leave_requests':
+                  leaveData.sickLeaves += totalDays;
+                  break;
+                case 'casual_leave_requests':
+                  leaveData.casualLeaves += totalDays;
+                  break;
+                case 'paid_leave_requests':
+                  leaveData.paidLeaves += totalDays;
+                  break;
+                case 'optional_holiday_requests':
+                  leaveData.optionalHolidays += totalDays;
+                  break;
+                case 'lwp_requests':
+                case 'official_leave_requests':
+                  // These don't count towards regular leave balances
+                  break;
+              }
+              
+              // Count by status
+              switch (status.toLowerCase()) {
+                case 'approved':
+                case 'completed':
+                  leaveData.approvedLeaves += totalDays;
+                  break;
+                case 'pending':
+                  leaveData.pendingLeaves += totalDays;
+                  break;
+                case 'rejected':
+                case 'cancelled':
+                  leaveData.rejectedLeaves += totalDays;
+                  break;
+              }
+              
+              leaveData.totalLeaves += totalDays;
+            }
+          } catch (e) {
+            // Skip errors for this leave collection
+          }
         }
       }
+      
+      // Remove employees with no leave data
+      data.removeWhere((key, value) => value.totalLeaves == 0);
 
       setState(() => _leaveData = data.values.toList()..sort((a, b) => b.totalLeaves.compareTo(a.totalLeaves)));
     } catch (e) {
@@ -235,35 +436,28 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
   Future<void> _loadWorkingHoursReport() async {
     setState(() => _isLoadingWorkingHours = true);
     try {
-      Query query = _firestore.collection('attendance')
-          .where('date', isGreaterThanOrEqualTo: _startDate)
-          .where('date', isLessThanOrEqualTo: _endDate)
-          .where('isPresent', isEqualTo: true);
-      
-      if (_selectedEmployeeId != null) {
-        query = query.where('employeeId', isEqualTo: _selectedEmployeeId);
-      }
-
-      final snapshot = await query.get();
+      final dateRange = _monthDateRange;
       final data = <String, WorkingHoursReportData>{};
-
-      for (final doc in snapshot.docs) {
-        final docData = doc.data() as Map<String, dynamic>;
-        final employeeId = docData['employeeId'] as String;
-        final workingHours = (docData['workingHours'] ?? 0.0).toDouble();
-        final overtimeHours = (docData['overtimeHours'] ?? 0.0).toDouble();
-        final isLate = docData['isLate'] ?? false;
-
-        if (!data.containsKey(employeeId)) {
-          final employee = _employees.firstWhere((e) => e.id == employeeId, orElse: () => AppUser(
-            id: employeeId,
-            name: 'Unknown Employee',
-            email: '',
-            role: UserRole.employee,
-            createdAt: DateTime.now(),
-          ));
-          
-          data[employeeId] = WorkingHoursReportData(
+      
+      // Get employees to process based on selection
+      final employeesToProcess = _selectedEmployeeId != null 
+          ? _employees.where((e) => e.id == _selectedEmployeeId).toList()
+          : _employees.toList();
+      
+      if (employeesToProcess.isEmpty) {
+        setState(() {
+          _workingHoursData = [];
+          _isLoadingWorkingHours = false;
+        });
+        return;
+      }
+      
+      for (final employee in employeesToProcess) {
+        final empCode = employee.empCode;
+        
+        if (empCode == null) {
+          // Create zero-data entry for employees without empCode
+          data[employee.id] = WorkingHoursReportData(
             employee: employee,
             totalWorkingHours: 0.0,
             totalOvertimeHours: 0.0,
@@ -272,29 +466,167 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
             lateDays: 0,
             productivityScore: 0.0,
           );
+          continue;
         }
-
-        final workingData = data[employeeId]!;
-        workingData.totalWorkingHours += workingHours;
-        workingData.totalOvertimeHours += overtimeHours;
-        workingData.workingDays++;
-        if (isLate) {
-          workingData.lateDays++;
-        }
-      }
-
-      // Calculate averages and productivity scores
-      for (final workingData in data.values) {
-        workingData.averageWorkingHours = workingData.workingDays > 0 
-            ? workingData.totalWorkingHours / workingData.workingDays 
-            : 0.0;
         
-        // Productivity score based on average hours and punctuality
-        final hoursScore = (workingData.averageWorkingHours / 8.0) * 70; // 70% weight for hours
-        final punctualityScore = workingData.workingDays > 0 
-            ? ((workingData.workingDays - workingData.lateDays) / workingData.workingDays) * 30 // 30% weight for punctuality
-            : 0.0;
-        workingData.productivityScore = (hoursScore + punctualityScore).clamp(0.0, 100.0);
+        try {
+          // Get attendance data for this employee
+          final attendanceDoc = await _firestore
+              .collection('attendance')
+              .doc(empCode)
+              .get();
+          
+          if (!attendanceDoc.exists) {
+            // No attendance data found
+            data[employee.id] = WorkingHoursReportData(
+              employee: employee,
+              totalWorkingHours: 0.0,
+              totalOvertimeHours: 0.0,
+              averageWorkingHours: 0.0,
+              workingDays: 0,
+              lateDays: 0,
+              productivityScore: 0.0,
+            );
+            continue;
+          }
+          
+          final attendanceData = attendanceDoc.data()!;
+          final activeMonths = (attendanceData['activeMonths'] as List<dynamic>?)?.cast<String>() ?? [];
+          
+          double totalWorkingHours = 0.0;
+          double totalOvertimeHours = 0.0;
+          int workingDays = 0;
+          int lateDays = 0;
+          
+          // Process each month within the date range
+          for (final monthCollection in activeMonths) {
+            final monthDocs = await _firestore
+                .collection('attendance')
+                .doc(empCode)
+                .collection(monthCollection)
+                .get();
+            
+            for (final dayDoc in monthDocs.docs) {
+              final dayData = dayDoc.data();
+              
+              // Parse the date
+              final dateStr = dayData['date'] as String?;
+              if (dateStr == null) continue;
+              
+              final dateParts = dateStr.split('-');
+              if (dateParts.length != 3) continue;
+              
+              final day = int.tryParse(dateParts[0]);
+              final month = int.tryParse(dateParts[1]);
+              final year = int.tryParse(dateParts[2]);
+              
+              if (day == null || month == null || year == null) continue;
+              
+              final recordDate = DateTime(year, month, day);
+              
+              // Check if within date range
+              if (recordDate.isBefore(dateRange.start) || recordDate.isAfter(dateRange.end)) {
+                continue;
+              }
+              
+              // Process punches
+              final punches = (dayData['punches'] as List<dynamic>?)?.cast<Map<String, dynamic>>() ?? [];
+              
+              if (punches.isEmpty) continue; // No punches = not present
+              
+              DateTime? checkIn;
+              DateTime? checkOut;
+              
+              // Extract check-in and check-out times
+              for (final punch in punches) {
+                final type = punch['type'] as String?;
+                final datetime = punch['datetime'] as String?;
+                
+                if (datetime != null) {
+                  try {
+                    final parts = datetime.split(' ');
+                    if (parts.length >= 2) {
+                      final datePart = parts[0];
+                      final timePart = parts[1];
+                      
+                      final dateParts = datePart.split('/');
+                      final timeParts = timePart.split(':');
+                      
+                      if (dateParts.length == 3 && timeParts.length >= 2) {
+                        final punchDay = int.parse(dateParts[0]);
+                        final punchMonth = int.parse(dateParts[1]);
+                        final punchYear = int.parse(dateParts[2]);
+                        final hour = int.parse(timeParts[0]);
+                        final minute = int.parse(timeParts[1]);
+                        
+                        final punchTime = DateTime(punchYear, punchMonth, punchDay, hour, minute);
+                        
+                        if (type == 'IN' && checkIn == null) {
+                          checkIn = punchTime;
+                        } else if (type == 'OUT') {
+                          checkOut = punchTime;
+                        }
+                      }
+                    }
+                  } catch (e) {
+                    // Skip invalid punch times
+                  }
+                }
+              }
+              
+              // Calculate working hours if both check-in and check-out exist
+              if (checkIn != null && checkOut != null) {
+                workingDays++;
+                final workingMinutes = checkOut.difference(checkIn).inMinutes;
+                final dayWorkingHours = workingMinutes / 60.0;
+                totalWorkingHours += dayWorkingHours;
+                
+                // Calculate overtime (hours beyond 8)
+                if (dayWorkingHours > 8.0) {
+                  totalOvertimeHours += (dayWorkingHours - 8.0);
+                }
+                
+                // Check if late (after 9:00 AM)
+                final standardTime = DateTime(checkIn.year, checkIn.month, checkIn.day, 9, 0);
+                if (checkIn.isAfter(standardTime)) {
+                  lateDays++;
+                }
+              } else if (checkIn != null) {
+                // Only check-in, still count as working day but incomplete
+                workingDays++;
+                
+                // Check if late
+                final standardTime = DateTime(checkIn.year, checkIn.month, checkIn.day, 9, 0);
+                if (checkIn.isAfter(standardTime)) {
+                  lateDays++;
+                }
+              }
+            }
+          }
+          
+          // Create report data if employee has working days
+          if (workingDays > 0) {
+            final averageWorkingHours = totalWorkingHours / workingDays;
+            
+            // Calculate productivity score
+            final hoursScore = (averageWorkingHours / 8.0) * 70; // 70% weight for hours
+            final punctualityScore = ((workingDays - lateDays) / workingDays) * 30; // 30% weight for punctuality
+            final productivityScore = (hoursScore + punctualityScore).clamp(0.0, 100.0);
+            
+            data[employee.id] = WorkingHoursReportData(
+              employee: employee,
+              totalWorkingHours: totalWorkingHours,
+              totalOvertimeHours: totalOvertimeHours,
+              averageWorkingHours: averageWorkingHours,
+              workingDays: workingDays,
+              lateDays: lateDays,
+              productivityScore: productivityScore,
+            );
+          }
+          
+        } catch (e) {
+          // Skip employee if error processing their data
+        }
       }
 
       setState(() => _workingHoursData = data.values.toList()..sort((a, b) => b.productivityScore.compareTo(a.productivityScore)));
@@ -305,20 +637,245 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
     }
   }
 
-  Future<void> _selectDateRange() async {
-    final picked = await showDateRangePicker(
-      context: context,
-      firstDate: DateTime.now().subtract(const Duration(days: 365)),
-      lastDate: DateTime.now(),
-      initialDateRange: DateTimeRange(start: _startDate, end: _endDate),
-    );
+  Future<void> _syncThreeMonthsData() async {
+    try {
+      // Show confirmation dialog with detailed information
+      final shouldSync = await showDialog<bool>(
+        context: context,
+        builder: (context) => AlertDialog(
+          title: const Text('Sync 3 Months Attendance Data'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text(
+                'This will sync attendance data for the past 3 months for ALL employees:',
+                style: TextStyle(fontWeight: FontWeight.w500),
+              ),
+              const SizedBox(height: 12),
+              Text('• ${_employees.length} employees will be processed'),
+              const Text('• Data for past 90 days will be synced'),
+              const Text('• This process may take 10-15 minutes'),
+              const Text('• Existing data will not be duplicated'),
+              const SizedBox(height: 16),
+              const Text(
+                'Please ensure you have a stable internet connection before proceeding.',
+                style: TextStyle(fontStyle: FontStyle.italic, color: Colors.orange),
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context, false),
+              child: const Text('Cancel'),
+            ),
+            ElevatedButton(
+              onPressed: () => Navigator.pop(context, true),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: Colors.orange[700],
+                foregroundColor: Colors.white,
+              ),
+              child: const Text('Start Sync'),
+            ),
+          ],
+        ),
+      );
 
-    if (picked != null) {
-      setState(() {
-        _startDate = picked.start;
-        _endDate = picked.end;
-      });
-      _loadAllReports();
+      if (shouldSync != true) return;
+
+      // Calculate date range for past 3 months
+      final now = DateTime.now();
+      final threeMonthsAgo = DateTime(now.year, now.month - 3, now.day);
+      final fromDate = '${threeMonthsAgo.year}-${threeMonthsAgo.month.toString().padLeft(2, '0')}-${threeMonthsAgo.day.toString().padLeft(2, '0')}';
+      final toDate = '${now.year}-${now.month.toString().padLeft(2, '0')}-${now.day.toString().padLeft(2, '0')}';
+
+      print('📅 Syncing data from $fromDate to $toDate for ${_employees.length} employees');
+
+      // Show progress dialog
+      int processedCount = 0;
+      final totalEmployees = _employees.where((e) => e.empCode != null).length;
+      
+      showDialog(
+        context: context,
+        barrierDismissible: false,
+        builder: (context) => StatefulBuilder(
+          builder: (context, setDialogState) => AlertDialog(
+            title: const Text('Syncing Attendance Data'),
+            content: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const CircularProgressIndicator(),
+                const SizedBox(height: 20),
+                Text('Processing employee $processedCount of $totalEmployees'),
+                const SizedBox(height: 12),
+                LinearProgressIndicator(
+                  value: totalEmployees > 0 ? processedCount / totalEmployees : 0,
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  '${(totalEmployees > 0 ? (processedCount / totalEmployees * 100) : 0).toStringAsFixed(1)}% Complete',
+                  style: const TextStyle(fontSize: 12, color: Colors.grey),
+                ),
+              ],
+            ),
+          ),
+        ),
+      );
+
+      // Process employees in batches to avoid overwhelming the system
+      final List<String> successfulSyncs = [];
+      final List<String> failedSyncs = [];
+      const batchSize = 5; // Process 5 employees at a time
+      
+      final employeesWithCodes = _employees.where((e) => e.empCode != null).toList();
+      
+      for (int i = 0; i < employeesWithCodes.length; i += batchSize) {
+        final batch = employeesWithCodes.skip(i).take(batchSize).toList();
+        
+        // Process batch in parallel
+        final batchFutures = batch.map((employee) async {
+          try {
+            final callable = FirebaseFunctions.instance.httpsCallable('syncBiometricData');
+            final result = await callable.call({
+              'empcode': employee.empCode,
+              'fromDate': fromDate,
+              'toDate': toDate,
+            });
+            
+            if (result.data['success'] == true) {
+              final recordsCount = result.data['recordsProcessed'] ?? 0;
+              print('✅ Synced ${employee.empCode} (${employee.name}): $recordsCount records');
+              return '${employee.name}: $recordsCount records';
+            } else {
+              print('❌ Failed to sync ${employee.empCode} (${employee.name}): ${result.data['message'] ?? 'Unknown error'}');
+              return null;
+            }
+          } catch (e) {
+            print('❌ Error syncing ${employee.empCode} (${employee.name}): $e');
+            return null;
+          }
+        });
+
+        final batchResults = await Future.wait(batchFutures);
+        
+        // Update progress
+        for (int j = 0; j < batchResults.length; j++) {
+          processedCount++;
+          final result = batchResults[j];
+          final employee = batch[j];
+          
+          if (result != null) {
+            successfulSyncs.add(result);
+          } else {
+            failedSyncs.add(employee.name);
+          }
+        }
+
+        // Update progress dialog (if still open)
+        if (context.mounted) {
+          // Force rebuild of dialog to show progress
+          Navigator.pop(context);
+          
+          if (processedCount < totalEmployees) {
+            showDialog(
+              context: context,
+              barrierDismissible: false,
+              builder: (context) => AlertDialog(
+                title: const Text('Syncing Attendance Data'),
+                content: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const CircularProgressIndicator(),
+                    const SizedBox(height: 20),
+                    Text('Processing employee $processedCount of $totalEmployees'),
+                    const SizedBox(height: 12),
+                    LinearProgressIndicator(
+                      value: processedCount / totalEmployees,
+                    ),
+                    const SizedBox(height: 8),
+                    Text(
+                      '${(processedCount / totalEmployees * 100).toStringAsFixed(1)}% Complete',
+                      style: const TextStyle(fontSize: 12, color: Colors.grey),
+                    ),
+                  ],
+                ),
+              ),
+            );
+          }
+        }
+
+        // Small delay between batches to avoid rate limiting
+        if (i + batchSize < employeesWithCodes.length) {
+          await Future.delayed(const Duration(seconds: 2));
+        }
+      }
+
+      // Close progress dialog
+      if (context.mounted) {
+        Navigator.pop(context);
+      }
+
+      // Show completion summary
+      if (context.mounted) {
+        showDialog(
+          context: context,
+          builder: (context) => AlertDialog(
+            title: Row(
+              children: [
+                Icon(
+                  successfulSyncs.isNotEmpty ? Icons.check_circle : Icons.warning,
+                  color: successfulSyncs.isNotEmpty ? Colors.green : Colors.orange,
+                ),
+                const SizedBox(width: 8),
+                const Text('Sync Complete'),
+              ],
+            ),
+            content: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    '✅ Successfully synced: ${successfulSyncs.length} employees',
+                    style: const TextStyle(color: Colors.green, fontWeight: FontWeight.w500),
+                  ),
+                  if (failedSyncs.isNotEmpty) ...[
+                    const SizedBox(height: 8),
+                    Text(
+                      '❌ Failed to sync: ${failedSyncs.length} employees',
+                      style: const TextStyle(color: Colors.red, fontWeight: FontWeight.w500),
+                    ),
+                    const SizedBox(height: 8),
+                    Text('Failed employees: ${failedSyncs.join(', ')}'),
+                  ],
+                  const SizedBox(height: 12),
+                  const Text('Date range: Past 3 months'),
+                  Text('Period: $fromDate to $toDate'),
+                ],
+              ),
+            ),
+            actions: [
+              ElevatedButton(
+                onPressed: () {
+                  Navigator.pop(context);
+                  _loadAllReports(); // Refresh reports to show new data
+                },
+                child: const Text('OK'),
+              ),
+            ],
+          ),
+        );
+      }
+
+      print('🏁 3-Month bulk sync completed: ${successfulSyncs.length} successful, ${failedSyncs.length} failed');
+
+    } catch (e) {
+      // Close any open dialogs
+      if (context.mounted) {
+        Navigator.of(context, rootNavigator: true).pop();
+      }
+      _showMessage('Failed to sync 3-month data: $e', isError: true);
+      print('❌ 3-Month sync error: $e');
     }
   }
 
@@ -331,7 +888,7 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
       _showMessage('Report data ready for export (${csvData.length} records)', isError: false);
       
       // In a real implementation, you'd save this to a file or share it
-      print('CSV Data:\n$csvData');
+      // CSV data is ready for export
       
     } catch (e) {
       _showMessage('Failed to export report: $e', isError: true);
@@ -423,18 +980,9 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
       ),
       child: Column(
         children: [
-          Row(
-            children: [
-              Expanded(
-                flex: 2,
-                child: _buildEmployeeFilter(),
-              ),
-              const SizedBox(width: 12),
-              Expanded(
-                child: _buildDateRangeSelector(),
-              ),
-            ],
-          ),
+         _buildEmployeeFilter(),
+         const SizedBox(height: 12),
+         _buildDateRangeSelector(),
           const SizedBox(height: 12),
           Row(
             children: [
@@ -445,7 +993,19 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
                   label: const Text('Refresh'),
                 ),
               ),
-              const SizedBox(width: 12),
+              const SizedBox(width: 8),
+              Expanded(
+                child: ElevatedButton.icon(
+                  onPressed: _syncThreeMonthsData,
+                  icon: const Icon(Icons.cloud_sync),
+                  label: const Text('Sync 3 Months'),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: Colors.orange[700],
+                    foregroundColor: Colors.white,
+                  ),
+                ),
+              ),
+              const SizedBox(width: 8),
               Expanded(
                 child: ElevatedButton.icon(
                   onPressed: _exportReport,
@@ -465,6 +1025,14 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
   }
 
   Widget _buildEmployeeFilter() {
+    // Remove duplicates and sort employees
+    final uniqueEmployees = <String, AppUser>{};
+    for (final employee in _employees) {
+      uniqueEmployees[employee.id] = employee;
+    }
+    final employeesList = uniqueEmployees.values.toList()
+      ..sort((a, b) => a.name.compareTo(b.name));
+
     return DropdownButtonFormField<String?>(
       value: _selectedEmployeeId,
       decoration: const InputDecoration(
@@ -477,9 +1045,9 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
           value: null,
           child: Text('All Employees'),
         ),
-        ..._employees.map((employee) => DropdownMenuItem<String?>(
+        ...employeesList.map((employee) => DropdownMenuItem<String?>(
           value: employee.id,
-          child: Text(employee.name),
+          child: Text('${employee.name} (${employee.empCode ?? 'No Code'})'),
         )),
       ],
       onChanged: (value) {
@@ -490,30 +1058,53 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
   }
 
   Widget _buildDateRangeSelector() {
-    return InkWell(
-      onTap: _selectDateRange,
-      child: Container(
-        padding: const EdgeInsets.all(12),
-        decoration: BoxDecoration(
-          border: Border.all(color: Colors.grey[400]!),
-          borderRadius: BorderRadius.circular(4),
-        ),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            const Text(
-              'Date Range',
-              style: TextStyle(fontSize: 12, color: Colors.grey),
-            ),
-            const SizedBox(height: 4),
-            Text(
-              '${DateFormat('MMM d').format(_startDate)} - ${DateFormat('MMM d').format(_endDate)}',
-              style: const TextStyle(fontSize: 14),
-            ),
-          ],
-        ),
+    // Find the matching month or reset to first available
+    DateTime? validSelectedMonth;
+    
+    for (final month in _availableMonths) {
+      if (month.year == _selectedMonth.year && month.month == _selectedMonth.month) {
+        validSelectedMonth = month;
+        break;
+      }
+    }
+    
+    // If no valid month found, use the first available
+    final dropdownValue = validSelectedMonth ?? _availableMonths.first;
+    
+    // Update selected month if it changed
+    if (_selectedMonth != dropdownValue) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        setState(() => _selectedMonth = dropdownValue);
+      });
+    }
+
+    return DropdownButtonFormField<DateTime>(
+      value: dropdownValue,
+      decoration: const InputDecoration(
+        labelText: 'Month',
+        border: OutlineInputBorder(),
+        contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 8),
       ),
+      items: _availableMonths.map((month) {
+        return DropdownMenuItem<DateTime>(
+          value: month,
+          child: Text(DateFormat('MMMM yyyy').format(month)),
+        );
+      }).toList(),
+      onChanged: (value) {
+        if (value != null) {
+          setState(() => _selectedMonth = value);
+          _loadAllReports();
+        }
+      },
     );
+  }
+
+  // Helper method to get date range for the selected month
+  DateTimeRange get _monthDateRange {
+    final startOfMonth = DateTime(_selectedMonth.year, _selectedMonth.month, 1);
+    final endOfMonth = DateTime(_selectedMonth.year, _selectedMonth.month + 1, 0);
+    return DateTimeRange(start: startOfMonth, end: endOfMonth);
   }
 
   Widget _buildAttendanceReport() {
@@ -538,97 +1129,117 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
   Widget _buildAttendanceCard(AttendanceReportData data) {
     return Card(
       margin: const EdgeInsets.only(bottom: 12),
-      child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              children: [
-                CircleAvatar(
-                  backgroundColor: const Color(0xFF4285F4),
-                  child: Text(
-                    data.employee.name.isNotEmpty ? data.employee.name[0].toUpperCase() : '?',
-                    style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
-                  ),
-                ),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        data.employee.name,
-                        style: const TextStyle(
-                          fontSize: 16,
-                          fontWeight: FontWeight.bold,
-                        ),
-                      ),
-                      Text(
-                        data.period,
-                        style: TextStyle(
-                          fontSize: 14,
-                          color: Colors.grey[600],
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-                Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                  decoration: BoxDecoration(
-                    color: _getAttendanceColor(data.attendancePercentage),
-                    borderRadius: BorderRadius.circular(12),
-                  ),
-                  child: Text(
-                    '${data.attendancePercentage.toStringAsFixed(1)}%',
-                    style: const TextStyle(
-                      color: Colors.white,
-                      fontWeight: FontWeight.bold,
-                      fontSize: 12,
+      child: InkWell(
+        onTap: () {
+          Navigator.push(
+            context,
+            MaterialPageRoute(
+              builder: (context) => EmployeeAttendanceDetailScreen(
+                employee: data.employee,
+                selectedMonth: _selectedMonth,
+              ),
+            ),
+          );
+        },
+        borderRadius: BorderRadius.circular(8),
+        child: Padding(
+          padding: const EdgeInsets.all(16),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  CircleAvatar(
+                    backgroundColor: const Color(0xFF4285F4),
+                    child: Text(
+                      data.employee.name.isNotEmpty ? data.employee.name[0].toUpperCase() : '?',
+                      style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
                     ),
                   ),
-                ),
-              ],
-            ),
-            const SizedBox(height: 16),
-            Row(
-              children: [
-                Expanded(
-                  child: _buildMetricItem(
-                    'Present',
-                    '${data.presentDays}/${data.totalDays}',
-                    Icons.check_circle,
-                    Colors.green,
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          data.employee.name,
+                          style: const TextStyle(
+                            fontSize: 16,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                        Text(
+                          data.period,
+                          style: TextStyle(
+                            fontSize: 14,
+                            color: Colors.grey[600],
+                          ),
+                        ),
+                      ],
+                    ),
                   ),
-                ),
-                Expanded(
-                  child: _buildMetricItem(
-                    'Absent',
-                    '${data.absentDays}',
-                    Icons.cancel,
-                    Colors.red,
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                    decoration: BoxDecoration(
+                      color: _getAttendanceColor(data.attendancePercentage),
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    child: Text(
+                      '${data.attendancePercentage.toStringAsFixed(1)}%',
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontWeight: FontWeight.bold,
+                        fontSize: 12,
+                      ),
+                    ),
                   ),
-                ),
-                Expanded(
-                  child: _buildMetricItem(
-                    'Late',
-                    '${data.lateDays}',
-                    Icons.schedule,
-                    Colors.orange,
+                  const SizedBox(width: 8),
+                  Icon(
+                    Icons.arrow_forward_ios,
+                    size: 16,
+                    color: Colors.grey[400],
                   ),
-                ),
-                Expanded(
-                  child: _buildMetricItem(
-                    'Avg Hours',
-                    '${data.averageWorkingHours.toStringAsFixed(1)}h',
-                    Icons.access_time,
-                    const Color(0xFF4285F4),
+                ],
+              ),
+              const SizedBox(height: 16),
+              Row(
+                children: [
+                  Expanded(
+                    child: _buildMetricItem(
+                      'Present',
+                      '${data.presentDays}/${data.totalDays}',
+                      Icons.check_circle,
+                      Colors.green,
+                    ),
                   ),
-                ),
-              ],
-            ),
-          ],
+                  Expanded(
+                    child: _buildMetricItem(
+                      'Absent',
+                      '${data.absentDays}',
+                      Icons.cancel,
+                      Colors.red,
+                    ),
+                  ),
+                  Expanded(
+                    child: _buildMetricItem(
+                      'Late',
+                      '${data.lateDays}',
+                      Icons.schedule,
+                      Colors.orange,
+                    ),
+                  ),
+                  Expanded(
+                    child: _buildMetricItem(
+                      'Avg Hours',
+                      '${data.averageWorkingHours.toStringAsFixed(1)}h',
+                      Icons.access_time,
+                      const Color(0xFF4285F4),
+                    ),
+                  ),
+                ],
+              ),
+            ],
+          ),
         ),
       ),
     );
@@ -656,112 +1267,131 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
   Widget _buildLeaveCard(LeaveReportData data) {
     return Card(
       margin: const EdgeInsets.only(bottom: 12),
-      child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              children: [
-                CircleAvatar(
-                  backgroundColor: const Color(0xFF4285F4),
-                  child: Text(
-                    data.employee.name.isNotEmpty ? data.employee.name[0].toUpperCase() : '?',
-                    style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+      child: InkWell(
+        onTap: () {
+          Navigator.push(
+            context,
+            MaterialPageRoute(
+              builder: (context) => EmployeeAttendanceDetailScreen(
+                employee: data.employee,
+                selectedMonth: _selectedMonth,
+              ),
+            ),
+          );
+        },
+        borderRadius: BorderRadius.circular(8),
+        child: Padding(
+          padding: const EdgeInsets.all(16),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  CircleAvatar(
+                    backgroundColor: const Color(0xFF4285F4),
+                    child: Text(
+                      data.employee.name.isNotEmpty ? data.employee.name[0].toUpperCase() : '?',
+                      style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+                    ),
                   ),
-                ),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        data.employee.name,
-                        style: const TextStyle(
-                          fontSize: 16,
-                          fontWeight: FontWeight.bold,
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          data.employee.name,
+                          style: const TextStyle(
+                            fontSize: 16,
+                            fontWeight: FontWeight.bold,
+                          ),
                         ),
-                      ),
-                      Text(
-                        'Total: ${data.totalLeaves.toStringAsFixed(1)} days',
-                        style: TextStyle(
-                          fontSize: 14,
-                          color: Colors.grey[600],
+                        Text(
+                          'Total: ${data.totalLeaves.toStringAsFixed(1)} days',
+                          style: TextStyle(
+                            fontSize: 14,
+                            color: Colors.grey[600],
+                          ),
                         ),
-                      ),
-                    ],
+                      ],
+                    ),
                   ),
-                ),
-              ],
-            ),
-            const SizedBox(height: 16),
-            Row(
-              children: [
-                Expanded(
-                  child: _buildMetricItem(
-                    'Casual',
-                    '${data.casualLeaves.toStringAsFixed(0)}',
-                    Icons.event,
-                    Colors.blue,
+                  Icon(
+                    Icons.arrow_forward_ios,
+                    size: 16,
+                    color: Colors.grey[400],
                   ),
-                ),
-                Expanded(
-                  child: _buildMetricItem(
-                    'Sick',
-                    '${data.sickLeaves.toStringAsFixed(0)}',
-                    Icons.local_hospital,
-                    Colors.red,
+                ],
+              ),
+              const SizedBox(height: 16),
+              Row(
+                children: [
+                  Expanded(
+                    child: _buildMetricItem(
+                      'Casual',
+                      '${data.casualLeaves.toStringAsFixed(0)}',
+                      Icons.event,
+                      Colors.blue,
+                    ),
                   ),
-                ),
-                Expanded(
-                  child: _buildMetricItem(
-                    'Paid',
-                    '${data.paidLeaves.toStringAsFixed(0)}',
-                    Icons.monetization_on,
-                    Colors.green,
+                  Expanded(
+                    child: _buildMetricItem(
+                      'Sick',
+                      '${data.sickLeaves.toStringAsFixed(0)}',
+                      Icons.local_hospital,
+                      Colors.red,
+                    ),
                   ),
-                ),
-                Expanded(
-                  child: _buildMetricItem(
-                    'Optional',
-                    '${data.optionalHolidays.toStringAsFixed(0)}',
-                    Icons.celebration,
-                    Colors.orange,
+                  Expanded(
+                    child: _buildMetricItem(
+                      'Paid',
+                      '${data.paidLeaves.toStringAsFixed(0)}',
+                      Icons.monetization_on,
+                      Colors.green,
+                    ),
                   ),
-                ),
-              ],
-            ),
-            const SizedBox(height: 12),
-            Row(
-              children: [
-                Expanded(
-                  child: _buildMetricItem(
-                    'Approved',
-                    '${data.approvedLeaves.toStringAsFixed(0)}',
-                    Icons.check,
-                    Colors.green,
+                  Expanded(
+                    child: _buildMetricItem(
+                      'Optional',
+                      '${data.optionalHolidays.toStringAsFixed(0)}',
+                      Icons.celebration,
+                      Colors.orange,
+                    ),
                   ),
-                ),
-                Expanded(
-                  child: _buildMetricItem(
-                    'Pending',
-                    '${data.pendingLeaves.toStringAsFixed(0)}',
-                    Icons.hourglass_empty,
-                    Colors.orange,
+                ],
+              ),
+              const SizedBox(height: 12),
+              Row(
+                children: [
+                  Expanded(
+                    child: _buildMetricItem(
+                      'Approved',
+                      '${data.approvedLeaves.toStringAsFixed(0)}',
+                      Icons.check,
+                      Colors.green,
+                    ),
                   ),
-                ),
-                Expanded(
-                  child: _buildMetricItem(
-                    'Rejected',
-                    '${data.rejectedLeaves.toStringAsFixed(0)}',
-                    Icons.close,
-                    Colors.red,
+                  Expanded(
+                    child: _buildMetricItem(
+                      'Pending',
+                      '${data.pendingLeaves.toStringAsFixed(0)}',
+                      Icons.hourglass_empty,
+                      Colors.orange,
+                    ),
                   ),
-                ),
-                const Expanded(child: SizedBox()),
-              ],
-            ),
-          ],
+                  Expanded(
+                    child: _buildMetricItem(
+                      'Rejected',
+                      '${data.rejectedLeaves.toStringAsFixed(0)}',
+                      Icons.close,
+                      Colors.red,
+                    ),
+                  ),
+                  const Expanded(child: SizedBox()),
+                ],
+              ),
+            ],
+          ),
         ),
       ),
     );
@@ -789,97 +1419,117 @@ class _ReportsScreenState extends State<ReportsScreen> with SingleTickerProvider
   Widget _buildWorkingHoursCard(WorkingHoursReportData data) {
     return Card(
       margin: const EdgeInsets.only(bottom: 12),
-      child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              children: [
-                CircleAvatar(
-                  backgroundColor: const Color(0xFF4285F4),
-                  child: Text(
-                    data.employee.name.isNotEmpty ? data.employee.name[0].toUpperCase() : '?',
-                    style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
-                  ),
-                ),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        data.employee.name,
-                        style: const TextStyle(
-                          fontSize: 16,
-                          fontWeight: FontWeight.bold,
-                        ),
-                      ),
-                      Text(
-                        'Productivity: ${data.productivityScore.toStringAsFixed(1)}%',
-                        style: TextStyle(
-                          fontSize: 14,
-                          color: _getProductivityColor(data.productivityScore),
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-                Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                  decoration: BoxDecoration(
-                    color: _getProductivityColor(data.productivityScore),
-                    borderRadius: BorderRadius.circular(12),
-                  ),
-                  child: Text(
-                    '${data.productivityScore.toStringAsFixed(0)}%',
-                    style: const TextStyle(
-                      color: Colors.white,
-                      fontWeight: FontWeight.bold,
-                      fontSize: 12,
+      child: InkWell(
+        onTap: () {
+          Navigator.push(
+            context,
+            MaterialPageRoute(
+              builder: (context) => EmployeeAttendanceDetailScreen(
+                employee: data.employee,
+                selectedMonth: _selectedMonth,
+              ),
+            ),
+          );
+        },
+        borderRadius: BorderRadius.circular(8),
+        child: Padding(
+          padding: const EdgeInsets.all(16),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  CircleAvatar(
+                    backgroundColor: const Color(0xFF4285F4),
+                    child: Text(
+                      data.employee.name.isNotEmpty ? data.employee.name[0].toUpperCase() : '?',
+                      style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
                     ),
                   ),
-                ),
-              ],
-            ),
-            const SizedBox(height: 16),
-            Row(
-              children: [
-                Expanded(
-                  child: _buildMetricItem(
-                    'Total Hours',
-                    '${data.totalWorkingHours.toStringAsFixed(1)}h',
-                    Icons.access_time,
-                    const Color(0xFF4285F4),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          data.employee.name,
+                          style: const TextStyle(
+                            fontSize: 16,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                        Text(
+                          'Productivity: ${data.productivityScore.toStringAsFixed(1)}%',
+                          style: TextStyle(
+                            fontSize: 14,
+                            color: _getProductivityColor(data.productivityScore),
+                          ),
+                        ),
+                      ],
+                    ),
                   ),
-                ),
-                Expanded(
-                  child: _buildMetricItem(
-                    'Avg/Day',
-                    '${data.averageWorkingHours.toStringAsFixed(1)}h',
-                    Icons.trending_up,
-                    Colors.green,
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                    decoration: BoxDecoration(
+                      color: _getProductivityColor(data.productivityScore),
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    child: Text(
+                      '${data.productivityScore.toStringAsFixed(0)}%',
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontWeight: FontWeight.bold,
+                        fontSize: 12,
+                      ),
+                    ),
                   ),
-                ),
-                Expanded(
-                  child: _buildMetricItem(
-                    'Overtime',
-                    '${data.totalOvertimeHours.toStringAsFixed(1)}h',
-                    Icons.schedule,
-                    Colors.orange,
+                  const SizedBox(width: 8),
+                  Icon(
+                    Icons.arrow_forward_ios,
+                    size: 16,
+                    color: Colors.grey[400],
                   ),
-                ),
-                Expanded(
-                  child: _buildMetricItem(
-                    'Late Days',
-                    '${data.lateDays}/${data.workingDays}',
-                    Icons.schedule_outlined,
-                    Colors.red,
+                ],
+              ),
+              const SizedBox(height: 16),
+              Row(
+                children: [
+                  Expanded(
+                    child: _buildMetricItem(
+                      'Total Hours',
+                      '${data.totalWorkingHours.toStringAsFixed(1)}h',
+                      Icons.access_time,
+                      const Color(0xFF4285F4),
+                    ),
                   ),
-                ),
-              ],
-            ),
-          ],
+                  Expanded(
+                    child: _buildMetricItem(
+                      'Avg/Day',
+                      '${data.averageWorkingHours.toStringAsFixed(1)}h',
+                      Icons.trending_up,
+                      Colors.green,
+                    ),
+                  ),
+                  Expanded(
+                    child: _buildMetricItem(
+                      'Overtime',
+                      '${data.totalOvertimeHours.toStringAsFixed(1)}h',
+                      Icons.schedule,
+                      Colors.orange,
+                    ),
+                  ),
+                  Expanded(
+                    child: _buildMetricItem(
+                      'Late Days',
+                      '${data.lateDays}/${data.workingDays}',
+                      Icons.schedule_outlined,
+                      Colors.red,
+                    ),
+                  ),
+                ],
+              ),
+            ],
+          ),
         ),
       ),
     );

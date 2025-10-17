@@ -1,5 +1,4 @@
 import 'package:flutter/material.dart';
-import 'package:firebase_auth/firebase_auth.dart';
 
 import '../../../models/user_model.dart';
 import '../../../services/working_hours_service.dart';
@@ -52,19 +51,8 @@ class _SystemSettingsScreenState extends State<SystemSettingsScreen> {
 
   Future<void> _loadSystemSettings() async {
     try {
-      // Check if user is authenticated first
-      final currentUser = FirebaseAuth.instance.currentUser;
-      if (currentUser == null) {
-        print('❌ No authenticated user found');
-        setState(() {
-          _isLoading = false;
-        });
-        return;
-      }
-
       // Verify user has admin privileges
       if (!widget.user.isAdmin) {
-        print('❌ User does not have admin privileges');
         setState(() {
           _isLoading = false;
         });
@@ -74,19 +62,18 @@ class _SystemSettingsScreenState extends State<SystemSettingsScreen> {
         return;
       }
 
-      // Try to load working hours settings (with automatic fallback to Firestore)
+      // Load working hours settings (now public access - no authentication issues)
       WorkingHoursSettings? workingHoursSettings;
       try {
-        print('🔧 Loading settings for authenticated admin user: ${currentUser.email}');
+        print('🔧 Loading working hours settings...');
         workingHoursSettings = await _workingHoursService.getWorkingHoursSettings();
         print('✅ Successfully loaded working hours settings');
       } catch (e) {
         print('❌ Failed to load settings: $e');
-        // Show user-friendly error message
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
             SnackBar(
-              content: Text('Settings loaded from local defaults. You can still update them.'),
+              content: Text('Using default settings. Error: ${e.toString()}'),
               backgroundColor: Colors.orange,
             ),
           );

@@ -1,6 +1,7 @@
 import 'package:cloud_functions/cloud_functions.dart';
 import 'package:firebase_auth/firebase_auth.dart';
-import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:http/http.dart' as http;
+import 'dart:convert';
 
 // Data model classes
 class TimeRange {
@@ -239,172 +240,84 @@ class AttendanceStatus {
 class WorkingHoursService {
   final FirebaseFunctions _functions = FirebaseFunctions.instanceFor(region: 'us-central1');
   final FirebaseAuth _auth = FirebaseAuth.instance;
-  final FirebaseFirestore _firestore = FirebaseFirestore.instance;
 
-  /// Ensure user is properly authenticated and token is valid
-  Future<void> _ensureAuthenticated() async {
-    final currentUser = _auth.currentUser;
-    if (currentUser == null) {
-      throw Exception('User not authenticated');
-    }
 
-    // Force refresh the ID token to ensure it's valid
-    try {
-      await currentUser.getIdToken(true);
-      // Additional delay to ensure token propagation
-      await Future.delayed(const Duration(milliseconds: 500));
-    } catch (e) {
-      throw Exception('Failed to refresh authentication token: $e');
-    }
-  }
 
-  /// Retry mechanism for cloud function calls
-  Future<T> _retryCloudFunction<T>(Future<T> Function() operation, {int maxRetries = 3}) async {
-    dynamic lastException;
-    
-    for (int attempt = 1; attempt <= maxRetries; attempt++) {
-      try {
-        return await operation();
-      } catch (e) {
-        lastException = e;
-        print('Cloud function attempt $attempt failed: $e');
-        
-        // If it's an authentication error and not the last attempt, retry after delay
-        if (e.toString().contains('unauthenticated') && attempt < maxRetries) {
-          print('Retrying authentication in ${attempt * 1000}ms...');
-          await Future.delayed(Duration(milliseconds: attempt * 1000));
-          // Try refreshing auth token again
-          try {
-            await _ensureAuthenticated();
-          } catch (authError) {
-            print('Failed to re-authenticate: $authError');
-          }
-          continue;
-        }
-        
-        // For non-auth errors or last attempt, rethrow
-        rethrow;
-      }
-    }
-    
-    throw lastException ?? Exception('Unknown error occurred');
-  }
-
-  /// Get current working hours settings with Firestore fallback
+  /// Get current working hours settings (multiple fallback methods)
   Future<WorkingHoursSettings> getWorkingHoursSettings() async {
+    // Try HTTP request first (no auth headers)
     try {
-      // First, try the cloud function
-      return await _retryCloudFunction(() async {
-        final callable = _functions.httpsCallable('getWorkingHoursSettings');
-        final result = await callable.call();
-
-        if (result.data['success'] == true) {
-          final settingsData = result.data['settings'];
-          // Convert to Map<String, dynamic> to avoid type casting issues
-          final Map<String, dynamic> settings = Map<String, dynamic>.from(settingsData as Map);
-          return WorkingHoursSettings.fromJson(settings);
-        } else {
-          throw Exception('Failed to get working hours settings');
-        }
-      });
-    } catch (e) {
-      print('Error getting working hours settings via cloud function: $e');
+      const String functionUrl = 'https://us-central1-hmu-time.cloudfunctions.net/getSystemSettings';
       
-      // If cloud function fails, try direct Firestore access
-      try {
-        print('🔄 Falling back to direct Firestore access');
+      final response = await http.get(
+        Uri.parse(functionUrl),
+        headers: {'Content-Type': 'application/json'},
+      ).timeout(const Duration(seconds: 10));
+
+      if (response.statusCode == 200) {
+        final Map<String, dynamic> data = json.decode(response.body);
         
-        // Ensure user is authenticated for Firestore access
-        final currentUser = _auth.currentUser;
-        if (currentUser == null) {
-          throw Exception('User not authenticated for Firestore access');
+        if (data['success'] == true) {
+          final settingsData = data['settings'];
+          final Map<String, dynamic> settings = Map<String, dynamic>.from(settingsData as Map);
+          print('✅ Loaded settings via HTTP');
+          return WorkingHoursSettings.fromJson(settings);
         }
-
-        final settingsDoc = await _firestore
-            .collection('system_settings')
-            .doc('config')
-            .get();
-
-        if (!settingsDoc.exists) {
-          print('📋 No system settings found in Firestore, using defaults');
-          return _getDefaultSettings();
-        }
-
-        final data = settingsDoc.data();
-        if (data == null) {
-          print('📋 System settings document is null, using defaults');
-          return _getDefaultSettings();
-        }
-
-        print('✅ Successfully retrieved settings from Firestore');
-        return WorkingHoursSettings.fromJson(data);
-        
-      } catch (firestoreError) {
-        print('❌ Firestore fallback also failed: $firestoreError');
-        print('📋 Using default settings as last resort');
-        return _getDefaultSettings();
       }
+    } catch (e) {
+      print('🌐 HTTP request failed: $e, trying callable function...');
     }
+
+    // Fallback to callable function (should return defaults on any error)
+    try {
+      final callable = _functions.httpsCallable('getWorkingHoursSettings');
+      final result = await callable.call().timeout(const Duration(seconds: 10));
+
+      if (result.data['success'] == true) {
+        final settingsData = result.data['settings'];
+        final Map<String, dynamic> settings = Map<String, dynamic>.from(settingsData as Map);
+        print('✅ Loaded settings via callable function');
+        return WorkingHoursSettings.fromJson(settings);
+      }
+    } catch (e) {
+      print('📞 Callable function failed: $e');
+    }
+
+    // Final fallback to default settings
+    print('📋 Using default settings as final fallback');
+    return _getDefaultSettings();
   }
 
-  /// Update working hours settings with Firestore fallback
+  /// Update working hours settings (requires authentication)
   Future<WorkingHoursUpdateResult> updateWorkingHoursSettings(WorkingHoursSettings settings) async {
     try {
-      await _ensureAuthenticated();
+      // Ensure user is authenticated for updates
+      final currentUser = _auth.currentUser;
+      if (currentUser == null) {
+        return WorkingHoursUpdateResult(
+          success: false,
+          error: 'User not authenticated',
+        );
+      }
 
-      // First, try the cloud function
-      try {
-        return await _retryCloudFunction(() async {
-          final callable = _functions.httpsCallable('updateWorkingHoursSettings');
-          final dataToSend = settings.toJson();
-          print('🔄 Sending to cloud function: ${dataToSend}');
-          final result = await callable.call(dataToSend);
+      final callable = _functions.httpsCallable('updateWorkingHoursSettings');
+      final dataToSend = settings.toJson();
+      print('🔄 Sending to cloud function: ${dataToSend}');
+      final result = await callable.call(dataToSend);
 
-          if (result.data['success'] == true) {
-            final updatedSettingsData = result.data['settings'];
-            final Map<String, dynamic> updatedSettings = Map<String, dynamic>.from(updatedSettingsData as Map);
-            
-            return WorkingHoursUpdateResult(
-              success: true,
-              message: result.data['message'] ?? 'Settings updated successfully',
-              settings: WorkingHoursSettings.fromJson(updatedSettings),
-            );
-          } else {
-            throw Exception(result.data['error'] ?? 'Failed to update settings');
-          }
-        });
-      } catch (e) {
-        print('Cloud function failed, falling back to Firestore: $e');
-        
-        // Fallback to direct Firestore access
-        final currentUser = _auth.currentUser;
-        if (currentUser == null) {
-          throw Exception('User not authenticated for Firestore access');
-        }
-
-        final settingsData = {
-          // v3.0 Employee-specific structure
-          'fullTimeEmployee': settings.fullTimeEmployee.toJson(),
-          'partTimeEmployee': settings.partTimeEmployee.toJson(),
-          'consultantEmployee': settings.consultantEmployee.toJson(),
-          
-          // Metadata
-          'version': '3.0',
-          'updatedAt': FieldValue.serverTimestamp(),
-          'updatedBy': currentUser.email,
-        };
-
-        await _firestore
-            .collection('system_settings')
-            .doc('config')
-            .set(settingsData, SetOptions(merge: true));
-
-        print('✅ Successfully updated settings via Firestore');
+      if (result.data['success'] == true) {
+        final updatedSettingsData = result.data['settings'];
+        final Map<String, dynamic> updatedSettings = Map<String, dynamic>.from(updatedSettingsData as Map);
         
         return WorkingHoursUpdateResult(
           success: true,
-          message: 'Settings updated successfully via direct database access',
-          settings: settings,
+          message: result.data['message'] ?? 'Settings updated successfully',
+          settings: WorkingHoursSettings.fromJson(updatedSettings),
+        );
+      } else {
+        return WorkingHoursUpdateResult(
+          success: false,
+          error: result.data['error'] ?? 'Failed to update settings',
         );
       }
     } catch (e) {
@@ -445,34 +358,52 @@ class WorkingHoursService {
           break;
       }
 
-      // Calculate status
-      String status;
-      String statusDetails;
+      // Calculate status based on employee type
+      String status = 'absent';
+      String statusDetails = 'No working hours recorded';
       double overtimeHours = 0.0;
 
       if (workingHours == 0.0) {
         status = 'absent';
         statusDetails = 'No working hours recorded';
-      } else if (halfDayRange != null && 
-                 workingHours >= halfDayRange.start && 
-                 workingHours <= halfDayRange.end) {
-        status = 'present_half';
-        statusDetails = 'Half day attendance';
-      } else if (incompleteRange != null &&
-                 workingHours >= incompleteRange.start && 
-                 workingHours < incompleteRange.end) {
-        status = 'incomplete';
-        statusDetails = 'Incomplete working hours';
-      } else if (workingHours >= requiredHours) {
-        status = 'present_full';
-        statusDetails = 'Full day attendance';
-        // Only calculate overtime for full-time employees (simplified)
-        if (employeeType.toLowerCase() == 'full_time' && workingHours > requiredHours) {
-          overtimeHours = workingHours - requiredHours;
+      } else if (employeeType.toLowerCase() == 'part_time') {
+        // Part-time: Only Complete or Incomplete (NO half-day)
+        if (workingHours >= requiredHours) {
+          status = 'present_full';
+          statusDetails = 'Completed part-time day';
+        } else {
+          status = 'incomplete';
+          statusDetails = 'Incomplete part-time hours';
+        }
+      } else if (employeeType.toLowerCase() == 'consultant') {
+        // Consultant: Only Complete or Incomplete (NO half-day)
+        if (workingHours >= requiredHours) {
+          status = 'present_full';
+          statusDetails = 'Completed consultant day';
+        } else {
+          status = 'incomplete';
+          statusDetails = 'Incomplete consultant hours';
         }
       } else {
-        status = 'present_partial';
-        statusDetails = 'Partial day attendance';
+        // Full-time: Complete, Incomplete, or Half-day
+        if (workingHours >= requiredHours) {
+          status = 'present_full';
+          statusDetails = 'Full day attendance';
+          overtimeHours = workingHours - requiredHours;
+        } else if (incompleteRange != null && 
+                   workingHours >= incompleteRange.start && 
+                   workingHours < requiredHours) {
+          status = 'incomplete';
+          statusDetails = 'Incomplete working hours';
+        } else if (halfDayRange != null && 
+                   workingHours > 0 && 
+                   workingHours <= halfDayRange.end) {
+          status = 'present_half';
+          statusDetails = 'Half day attendance';
+        } else if (workingHours > 0) {
+          status = 'present_partial';
+          statusDetails = 'Partial day attendance';
+        }
       }
 
       return AttendanceStatus(
@@ -526,42 +457,32 @@ class WorkingHoursService {
   /// 
   /// This method is used when working hours settings are changed and you need to
   /// update existing attendance records to reflect the new thresholds.
-  /// 
-  /// Example use cases:
-  /// - Admin changes the half-day threshold from 4.0 to 4.5 hours
-  /// - Incomplete hours threshold is updated from 7.5 to 8.0 hours
-  /// - Part-time working hours are changed from 4.0 to 6.0 hours
-  /// 
-  /// The system will re-evaluate all attendance records and update their status
-  /// (full day, half day, incomplete, etc.) based on the new settings.
   Future<RecalculationResult> recalculateAllAttendanceStatuses() async {
     try {
-      await _ensureAuthenticated();
-
-      // Try cloud function first
-      try {
-        return await _retryCloudFunction(() async {
-          final callable = _functions.httpsCallable('recalculateAllAttendanceStatuses');
-          final result = await callable.call();
-
-          if (result.data['success'] == true) {
-            return RecalculationResult(
-              success: true,
-              recordsUpdated: (result.data['recordsUpdated'] ?? 0).toInt(),
-              message: result.data['message'] ?? 'Recalculation completed successfully',
-            );
-          } else {
-            throw Exception(result.data['error'] ?? 'Failed to recalculate attendance');
-          }
-        });
-      } catch (e) {
-        print('Cloud function recalculation failed: $e');
-        
-        // For now, return a message indicating this feature needs cloud function support
+      // Ensure user is authenticated for recalculation
+      final currentUser = _auth.currentUser;
+      if (currentUser == null) {
         return RecalculationResult(
           success: false,
           recordsUpdated: 0,
-          error: 'Recalculation requires cloud function support. Please ensure the recalculateAllAttendanceStatuses cloud function is deployed.',
+          error: 'User not authenticated',
+        );
+      }
+
+      final callable = _functions.httpsCallable('recalculateAllAttendanceStatuses');
+      final result = await callable.call();
+
+      if (result.data['success'] == true) {
+        return RecalculationResult(
+          success: true,
+          recordsUpdated: (result.data['recordsUpdated'] ?? 0).toInt(),
+          message: result.data['message'] ?? 'Recalculation completed successfully',
+        );
+      } else {
+        return RecalculationResult(
+          success: false,
+          recordsUpdated: 0,
+          error: result.data['error'] ?? 'Failed to recalculate attendance',
         );
       }
     } catch (e) {
