@@ -991,6 +991,7 @@ class AdminLeaveRequest {
   final String? selectedOptionalHolidayId;
   final String? createdAt;
   final String? updatedAt;
+  final List<DateTime>? deductionDates;
 
   AdminLeaveRequest({
     required this.id,
@@ -1016,6 +1017,7 @@ class AdminLeaveRequest {
     this.selectedOptionalHolidayId,
     this.createdAt,
     this.updatedAt,
+    this.deductionDates,
   });
 
   factory AdminLeaveRequest.fromMap(Map<String, dynamic> map) {
@@ -1043,6 +1045,27 @@ class AdminLeaveRequest {
       selectedOptionalHolidayId: map['selectedOptionalHolidayId'],
       createdAt: map['createdAt'],
       updatedAt: map['updatedAt'],
+      deductionDates: map['deductionDates'] != null 
+        ? (map['deductionDates'] as List).map((dynamic timestamp) {
+            if (timestamp is String) {
+              // ISO string format from Firebase Function
+              return DateTime.parse(timestamp);
+            } else if (timestamp is Timestamp) {
+              // Firestore Timestamp object (direct Firestore access)
+              return timestamp.toDate();
+            } else if (timestamp is Map) {
+              // Timestamp object format from Firebase Functions
+              final seconds = timestamp['_seconds'] ?? timestamp['seconds'];
+              final nanoseconds = timestamp['_nanoseconds'] ?? timestamp['nanoseconds'] ?? 0;
+              return DateTime.fromMillisecondsSinceEpoch(
+                (seconds * 1000) + (nanoseconds / 1000000).round(),
+              );
+            } else {
+              // Fallback: try to parse as DateTime
+              return DateTime.tryParse(timestamp.toString()) ?? DateTime.now();
+            }
+          }).cast<DateTime>().toList()
+        : null,
     );
   }
 

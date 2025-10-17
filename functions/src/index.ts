@@ -2840,7 +2840,9 @@ export const getAllEmployeeLeaveRequests = functions.https.onCall(
                   medicalCertificate: leaveData.medicalCertificate || null,
                   selectedOptionalHolidayId: leaveData.selectedOptionalHolidayId || null,
                   createdAt: convertTimestamp(leaveData.appliedAt), // Use appliedAt for createdAt
-                  updatedAt: convertTimestamp(leaveData.updatedAt)
+                  updatedAt: convertTimestamp(leaveData.updatedAt),
+                  deductionDates: leaveData.deductionDates ? 
+                    leaveData.deductionDates.map((timestamp: any) => convertTimestamp(timestamp)) : null
                 });
               });
 

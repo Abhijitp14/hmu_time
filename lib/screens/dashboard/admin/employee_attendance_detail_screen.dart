@@ -1,7 +1,10 @@
 import 'package:flutter/material.dart';
 import '../../../models/user_model.dart';
+import '../../../models/holiday_model.dart';
 import '../../../services/biometric_service.dart';
 import '../../../services/working_hours_service.dart';
+import '../../../services/holiday_service.dart';
+import '../../../services/leave_service.dart';
 
 class EmployeeAttendanceDetailScreen extends StatefulWidget {
   final AppUser employee;
@@ -20,8 +23,12 @@ class EmployeeAttendanceDetailScreen extends StatefulWidget {
 class _EmployeeAttendanceDetailScreenState extends State<EmployeeAttendanceDetailScreen> {
   final BiometricService _biometricService = BiometricService();
   final WorkingHoursService _workingHoursService = WorkingHoursService();
+  final HolidayService _holidayService = HolidayService();
+  final LeaveService _leaveService = LeaveService();
   
   List<BiometricRecord> _monthPunches = [];
+  List<Holiday> _monthHolidays = [];
+  List<DateTime> _leaveDates = [];
   bool _isLoading = true;
   WorkingHoursSettings? _workingHoursSettings;
   
@@ -52,9 +59,23 @@ class _EmployeeAttendanceDetailScreenState extends State<EmployeeAttendanceDetai
   }
 
   Future<void> _initializeData() async {
-    await _loadWorkingHoursSettings();
-    await _loadEmployeeAttendanceData();
-    _calculateSummaryData();
+    setState(() {
+      _isLoading = true;
+    });
+    
+    try {
+      await _loadWorkingHoursSettings();
+      await _loadEmployeeAttendanceData();
+      await _loadHolidays();
+      await _loadLeaveData();
+      _calculateSummaryData();
+    } catch (e) {
+      print('❌ Error during initialization: $e');
+    } finally {
+      setState(() {
+        _isLoading = false;
+      });
+    }
   }
 
   Future<void> _loadWorkingHoursSettings() async {
@@ -99,7 +120,6 @@ class _EmployeeAttendanceDetailScreenState extends State<EmployeeAttendanceDetai
 
   Future<void> _loadEmployeeAttendanceData() async {
     if (widget.employee.empCode == null) {
-      setState(() => _isLoading = false);
       return;
     }
 
@@ -141,8 +161,93 @@ class _EmployeeAttendanceDetailScreenState extends State<EmployeeAttendanceDetai
       }
     } catch (e) {
       print('❌ Error loading employee attendance data: $e');
-    } finally {
-      setState(() => _isLoading = false);
+    }
+  }
+
+  Future<void> _loadHolidays() async {
+    try {
+      // Get government and uncertain holidays for the selected month/year
+      final allHolidays = await _holidayService.getHolidaysForYear(widget.selectedMonth.year);
+      
+      // Filter for government and uncertain holidays only in the selected month
+      final holidaysForMonth = allHolidays.where((holiday) {
+        final isTargetMonth = holiday.date.month == widget.selectedMonth.month;
+        final isGovernmentOrUncertain = holiday.type == HolidayType.government || 
+                                       holiday.type == HolidayType.uncertain;
+        return isTargetMonth && isGovernmentOrUncertain;
+      }).toList();
+      
+      setState(() {
+        _monthHolidays = holidaysForMonth;
+      });
+    } catch (e) {
+      print('❌ Error loading holidays: $e');
+      setState(() {
+        _monthHolidays = [];
+      });
+    }
+  }
+
+  Future<void> _loadLeaveData() async {
+    try {
+      // Get leave requests for this specific employee
+      final result = await _leaveService.getAllEmployeeLeaveRequests(
+        employeeId: widget.employee.empCode,
+        limit: 100,
+      );
+      
+      if (result.success) {
+        final List<DateTime> leaveDates = [];
+        
+        for (final request in result.requests) {
+          // Include approved and completed leaves
+          if (request.status == 'approved' || request.status == 'completed') {
+            // Use deductionDates from the leave request if available
+            if (request.deductionDates != null && request.deductionDates!.isNotEmpty) {
+              // Check if the leave deduction dates fall within the selected month
+              final monthStart = DateTime(widget.selectedMonth.year, widget.selectedMonth.month, 1);
+              final monthEnd = DateTime(widget.selectedMonth.year, widget.selectedMonth.month + 1, 0);
+              
+              for (final deductionDate in request.deductionDates!) {
+                // Only add if it's within the selected month
+                if (!deductionDate.isBefore(monthStart) && !deductionDate.isAfter(monthEnd)) {
+                  leaveDates.add(DateTime(deductionDate.year, deductionDate.month, deductionDate.day));
+                }
+              }
+            } else {
+              // Fallback: Generate dates from start to end date for approved leaves (excluding Sundays)
+              final startDate = DateTime.parse(request.startDate);
+              final endDate = DateTime.parse(request.endDate);
+              
+              // Check if the leave falls within the selected month
+              final monthStart = DateTime(widget.selectedMonth.year, widget.selectedMonth.month, 1);
+              final monthEnd = DateTime(widget.selectedMonth.year, widget.selectedMonth.month + 1, 0);
+              
+              // Generate all dates between start and end date
+              DateTime currentDate = startDate;
+              while (!currentDate.isAfter(endDate)) {
+                // Only add if it's within the selected month
+                if (!currentDate.isBefore(monthStart) && !currentDate.isAfter(monthEnd)) {
+                  // Skip Sundays (weekday 7)
+                  if (currentDate.weekday != 7) {
+                    leaveDates.add(DateTime(currentDate.year, currentDate.month, currentDate.day));
+                  }
+                }
+                currentDate = currentDate.add(const Duration(days: 1));
+              }
+            }
+          }
+        }
+        
+        setState(() {
+          _leaveDates = leaveDates;
+        });
+      }
+    } catch (e) {
+      print('❌ Error loading leave data: $e');
+      setState(() {
+        _leaveDates = [];
+      });
     }
   }
 
@@ -162,8 +267,16 @@ class _EmployeeAttendanceDetailScreenState extends State<EmployeeAttendanceDetai
     for (int day = 1; day <= lastDayOfMonth.day; day++) {
       final date = DateTime(year, month, day);
       
-      // Skip future dates and Sundays
-      if (date.isAfter(today) || date.weekday == 7) continue;
+      // Check if it's a Government/Uncertain holiday
+      final isGovernmentOrUncertainHoliday = _monthHolidays.any((holiday) =>
+          (holiday.type == HolidayType.government || holiday.type == HolidayType.uncertain) &&
+          holiday.date.day == day &&
+          holiday.date.month == date.month &&
+          holiday.date.year == date.year
+      );
+      
+      // Skip future dates, Sundays, and Government/Uncertain holidays
+      if (date.isAfter(today) || date.weekday == 7 || isGovernmentOrUncertainHoliday) continue;
       
       _totalWorkingDays++;
       
@@ -305,21 +418,6 @@ class _EmployeeAttendanceDetailScreenState extends State<EmployeeAttendanceDetai
     }
   }
 
-  Color _getStatusColor(String status) {
-    switch (status) {
-      case 'Full Day':
-        return Colors.green;
-      case 'Half Day':
-        return Colors.orange;
-      case 'Incomplete':
-        return Colors.red;
-      case 'Absent':
-        return Colors.red.withOpacity(0.7);
-      default:
-        return Colors.grey;
-    }
-  }
-
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -332,28 +430,27 @@ class _EmployeeAttendanceDetailScreenState extends State<EmployeeAttendanceDetai
       body: _isLoading
           ? const Center(child: CircularProgressIndicator())
           : SingleChildScrollView(
-              child: Column(
-                children: [
-                  // Calendar Section - Fixed height
-                  SizedBox(
-                    height: MediaQuery.of(context).size.height * 0.5,
-                    child: _buildCalendarSection(),
-                  ),
-                  
-                  // Summary Section - Flexible height
-                  _buildSummarySection(),
-                ],
-              ),
+            child: Column(
+              children: [
+                // Calendar Section - Fixed height
+                _buildCalendarSection(),
+                
+                // Summary Section - Flexible height
+                _buildSummarySection(),
+              ],
             ),
+          ),
     );
   }
 
   Widget _buildCalendarSection() {
     return Container(
+      height: MediaQuery.of(context).size.height * 0.6,
       padding: const EdgeInsets.all(16),
       color: Colors.grey[50],
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
         children: [
           Text(
             '${_monthNames[widget.selectedMonth.month - 1]} ${widget.selectedMonth.year} Calendar',
@@ -403,6 +500,7 @@ class _EmployeeAttendanceDetailScreenState extends State<EmployeeAttendanceDetai
     final rows = (totalCells / 7).ceil();
     
     return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         // Week day headers
         Row(
@@ -425,10 +523,11 @@ class _EmployeeAttendanceDetailScreenState extends State<EmployeeAttendanceDetai
         const SizedBox(height: 8),
         
         // Calendar grid
-        Expanded(
+        Flexible(
           child: Column(
+            mainAxisSize: MainAxisSize.min,
             children: List.generate(rows, (rowIndex) {
-              return Expanded(
+              return Flexible(
                 child: Row(
                   children: List.generate(7, (colIndex) {
                     final cellIndex = rowIndex * 7 + colIndex;
@@ -462,14 +561,16 @@ class _EmployeeAttendanceDetailScreenState extends State<EmployeeAttendanceDetai
           spacing: 12,
           runSpacing: 8,
           children: [
-            _buildLegendItem('Full Day', Colors.green),
-            _buildLegendItem('Half Day', Colors.orange),
-            _buildLegendItem('Incomplete', Colors.orange),
-            _buildLegendItem('Late', Colors.orange),
-            _buildLegendItem('L-H (Late + Half)', Colors.orange),
-            _buildLegendItem('L-Inc (Late + Inc)', Colors.orange),
+            _buildLegendItem('Full - Full Day', Colors.green),
+            _buildLegendItem('Half - Half Day', Colors.purple),
+            _buildLegendItem('Inc - Incomplete', Colors.orange),
+            _buildLegendItem('L-F - Late + Full', Colors.orange),
+            _buildLegendItem('L-H - Late + Half', Colors.purple),
+            _buildLegendItem('L-Inc - Late + Incomplete', Colors.orange),
             _buildLegendItem('Absent', Colors.red),
-            _buildLegendItem('Holiday', Colors.blue),
+            _buildLegendItem('Holiday (Sunday)', Colors.blue),
+            _buildLegendItem('Holiday (Gov/Unc)', Colors.indigo),
+            _buildLegendItem('Leave (SL/PL/CL/OL/OH)', Colors.teal),
           ],
         ),
       ],
@@ -479,60 +580,95 @@ class _EmployeeAttendanceDetailScreenState extends State<EmployeeAttendanceDetai
   Widget _buildCalendarCell(int dayNumber, List<BiometricRecord> punches, DateTime date) {
     // Check if it's Sunday (weekday == 7)
     final isSunday = date.weekday == 7;
+    
+    // Check if it's a government or uncertain holiday
+    final isGovernmentOrUncertainHoliday = _monthHolidays.any((holiday) =>
+        holiday.date.day == dayNumber &&
+        holiday.date.month == date.month &&
+        holiday.date.year == date.year
+    );
+    
+    // Check if it's a leave day
+    final isLeaveDay = _leaveDates.any((leaveDate) =>
+        leaveDate.day == dayNumber &&
+        leaveDate.month == date.month &&
+        leaveDate.year == date.year
+    );
+    
     final today = DateTime.now();
     final currentDate = DateTime(date.year, date.month, date.day);
     final todayDate = DateTime(today.year, today.month, today.day);
     
     Color backgroundColor;
     Color textColor = Colors.black87;
-    Color? borderColor;
+    Color borderColor;
     String? statusText;
     
-    if (isSunday) {
-      // Sunday - Holiday
-      backgroundColor = Colors.blue.withOpacity(0.2);
-      borderColor = Colors.blue;
-      textColor = Colors.blue[800]!;
-      statusText = 'Holiday';
-    } else if (currentDate.isAfter(todayDate)) {
-      // Future date
-      backgroundColor = Colors.grey.withOpacity(0.1);
-      borderColor = Colors.grey[300];
-      textColor = Colors.grey[600]!;
+    // Priority 1: Government/Uncertain Holiday (ALWAYS shows as holiday, even if employee was present)
+    if (isGovernmentOrUncertainHoliday) {
+      backgroundColor = Colors.indigo.withOpacity(0.2);
+      borderColor = Colors.indigo;
+      textColor = Colors.indigo[800]!;
+      statusText = 'Gov/Unc';
     } else if (punches.isNotEmpty) {
-      // Has attendance data
+      // Priority 2: Check for attendance data (takes priority over employee leave/Sunday only)
       final dayData = _calculateDayWorkingHours(punches);
       final status = dayData['status'] as String;
       final isLate = dayData['isLate'] as bool;
       
       // Determine background color and status text
       if (status == 'Full Day') {
-        backgroundColor = Colors.green.withOpacity(0.2);
-        borderColor = Colors.green;
-        statusText = isLate ? 'Late' : 'Full Day';
+        if (isLate) {
+          backgroundColor = Colors.orange.withOpacity(0.2);
+          borderColor = Colors.orange;
+          statusText = 'L-F'; // Late + Full Day
+        } else {
+          backgroundColor = Colors.green.withOpacity(0.2);
+          borderColor = Colors.green;
+          statusText = 'Full';
+        }
       } else if (status == 'Half Day') {
-        backgroundColor = Colors.orange.withOpacity(0.2);
-        borderColor = Colors.orange;
+        backgroundColor = Colors.purple.withOpacity(0.2);
+        borderColor = Colors.purple;
         // Combine half day and late status
         if (isLate) {
           statusText = 'L-H'; // Late + Half Day
         } else {
-          statusText = 'Half Day';
+          statusText = 'Half';
         }
       } else if (status == 'Incomplete') {
         backgroundColor = Colors.orange.withOpacity(0.2);
         borderColor = Colors.orange;
-        statusText = isLate ? 'L-Inc' : 'Incomplete';
+        statusText = isLate ? 'L-Inc' : 'Inc';
       } else {
         // Any other status (like 'Total Hours')
         backgroundColor = Colors.orange.withOpacity(0.2);
         borderColor = Colors.orange;
-        statusText = isLate ? 'Late' : status;
+        statusText = isLate ? 'L-Oth' : 'Other';
       }
+    } else if (currentDate.isAfter(todayDate)) {
+      // Priority 3: Future date
+      backgroundColor = Colors.grey.withOpacity(0.1);
+      borderColor = Colors.grey[300]!;
+      textColor = Colors.grey[600]!;
+      statusText = null; // Future dates don't need status text
+    } else if (isSunday) {
+      // Priority 4: Sunday Holiday (only if no attendance and no gov/unc holiday)
+      backgroundColor = Colors.blue.withOpacity(0.2);
+      borderColor = Colors.blue;
+      textColor = Colors.blue[800]!;
+      statusText = 'Holiday';
+    } else if (isLeaveDay) {
+      // Priority 5: Employee Leave (only if no attendance and no gov/unc holiday)
+      backgroundColor = Colors.teal.withOpacity(0.2);
+      borderColor = Colors.teal;
+      textColor = Colors.teal[800]!;
+      statusText = 'Leave';
     } else {
-      // No attendance data - absent
+      // Priority 6: No attendance data and no special status - Absent
       backgroundColor = Colors.red.withOpacity(0.2);
       borderColor = Colors.red;
+      textColor = Colors.red[800]!;
       statusText = 'Absent';
     }
     
@@ -542,13 +678,14 @@ class _EmployeeAttendanceDetailScreenState extends State<EmployeeAttendanceDetai
         color: backgroundColor,
         borderRadius: BorderRadius.circular(8),
         border: Border.all(
-          color: borderColor ?? Colors.transparent,
+          color: borderColor,
           width: 1,
         ),
       ),
       child: statusText != null
           ? Column(
               mainAxisAlignment: MainAxisAlignment.center,
+              // mainAxisSize: MainAxisSize.min, 
               children: [
                 Text(
                   dayNumber.toString(),
@@ -558,13 +695,17 @@ class _EmployeeAttendanceDetailScreenState extends State<EmployeeAttendanceDetai
                     color: textColor,
                   ),
                 ),
+                const SizedBox(height: 1),
                 Text(
-                  statusText,
+                  statusText ?? '',
                   style: TextStyle(
                     fontSize: 8,
                     fontWeight: FontWeight.w500,
                     color: textColor,
                   ),
+                  textAlign: TextAlign.center,
+                  overflow: TextOverflow.ellipsis,
+                  maxLines: 1,
                 ),
               ],
             )
@@ -683,12 +824,15 @@ class _EmployeeAttendanceDetailScreenState extends State<EmployeeAttendanceDetai
           const SizedBox(height: 16),
           
           // Attendance Metrics
-          Expanded(
+          SizedBox(
+            // height: MediaQuery.of(context).size.height * 0.6, // Fixed height for the grid
             child: GridView.count(
               crossAxisCount: 2,
               crossAxisSpacing: 12,
               mainAxisSpacing: 12,
               childAspectRatio: 1.2,
+              shrinkWrap: true,
+              physics: const NeverScrollableScrollPhysics(),
               children: [
                 _buildMetricCard(
                   'Attendance %',
