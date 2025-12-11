@@ -76,6 +76,7 @@ extension LeaveTypeExtension on LeaveType {
       case 'lwp':
         return LeaveType.lwp;
       case 'officialleave':
+      case 'officialLeave':
         return LeaveType.officialLeave;
       default:
         return LeaveType.sick;

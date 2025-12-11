@@ -29,6 +29,7 @@ class _EmployeeAttendanceDetailScreenState extends State<EmployeeAttendanceDetai
   List<BiometricRecord> _monthPunches = [];
   List<Holiday> _monthHolidays = [];
   List<DateTime> _leaveDates = [];
+  List<DateTime> _officialLeaveDates = []; // Separate OL dates for priority handling
   bool _isLoading = true;
   WorkingHoursSettings? _workingHoursSettings;
   
@@ -42,10 +43,20 @@ class _EmployeeAttendanceDetailScreenState extends State<EmployeeAttendanceDetai
   int _totalWorkingDays = 0;
   int _presentDays = 0;
   int _absentDays = 0;
-  int _lateDays = 0;
   double _totalWorkingHours = 0.0;
-  double _averageWorkingHours = 0.0;
   double _attendancePercentage = 0.0;
+  
+  // Additional tracking for extra pay eligible attendance
+  int _sundayPresentDays = 0; // Track Sunday attendance separately
+  int _governmentHolidayPresentDays = 0; // Track government holiday attendance separately
+  int _uncertainHolidayPresentDays = 0; // Track uncertain holiday attendance separately
+  double _extraPayEligibleDays = 0.0; // Track extra pay eligible days (Sunday + Gov Holiday)
+  
+  // New detailed attendance metrics
+  int _fullDays = 0; // Full Day + Late + Full + Incomplete + Late + Incomplete (company policy)
+  int _halfDays = 0; // Half Day + Late + Half
+  int _incompleteDays = 0; // Late + Full + Late + Half + Incomplete + Late + Incomplete (behavioral tracking)
+  int _leaveDays = 0; // Only days where employee applied for leave AND was actually absent
 
   final List<String> _monthNames = [
     'January', 'February', 'March', 'April', 'May', 'June',
@@ -82,25 +93,33 @@ class _EmployeeAttendanceDetailScreenState extends State<EmployeeAttendanceDetai
     try {
       _workingHoursSettings = await _workingHoursService.getWorkingHoursSettings();
       
-      // Set employee-specific thresholds based on employee type
-      if (widget.employee.isPartTimeEmployee) {
-        _requiredHours = _workingHoursSettings!.partTimeEmployee.workingHours;
-        _incompleteThreshold = _workingHoursSettings!.partTimeEmployee.incompleteRange.end;
-        _halfDayThreshold = 0.0; // Part-time doesn't use half-day concept
-      } else if (widget.employee.isConsultantEmployee) {
-        _requiredHours = _workingHoursSettings!.consultantEmployee.workingHours;
-        _halfDayThreshold = 0.0; // Consultant doesn't use half-day concept
-        _incompleteThreshold = 0.0; // Consultant doesn't use incomplete concept
-      } else {
-        // Full-time employee
-        _requiredHours = _workingHoursSettings!.fullTimeEmployee.workingHours;
-        _halfDayThreshold = _workingHoursSettings!.fullTimeEmployee.halfDayRange.end;
-        _incompleteThreshold = _workingHoursSettings!.fullTimeEmployee.incompleteRange.end;
-        _lateThresholdTime = _workingHoursSettings!.fullTimeEmployee.lateThresholdTime;
+      // Check if settings were loaded successfully
+      if (_workingHoursSettings != null) {
+        // Set employee-specific thresholds based on employee type
+        if (widget.employee.isPartTimeEmployee) {
+          _requiredHours = _workingHoursSettings!.partTimeEmployee.workingHours;
+          _incompleteThreshold = _workingHoursSettings!.partTimeEmployee.incompleteRange.end;
+          _halfDayThreshold = 0.0; // Part-time doesn't use half-day concept
+        } else if (widget.employee.isConsultantEmployee) {
+          _requiredHours = _workingHoursSettings!.consultantEmployee.workingHours;
+          _halfDayThreshold = 0.0; // Consultant doesn't use half-day concept
+          _incompleteThreshold = 0.0; // Consultant doesn't use incomplete concept
+        } else {
+          // Full-time employee
+          _requiredHours = _workingHoursSettings!.fullTimeEmployee.workingHours;
+          _halfDayThreshold = _workingHoursSettings!.fullTimeEmployee.halfDayRange.end;
+          _incompleteThreshold = _workingHoursSettings!.fullTimeEmployee.incompleteRange.end;
+          _lateThresholdTime = _workingHoursSettings!.fullTimeEmployee.lateThresholdTime;
+        }
+        return; // Exit early if settings loaded successfully
       }
     } catch (e) {
       print('⚠️ Failed to load working hours settings: $e');
-      // Use default values based on employee type
+    }
+    
+    // Use default values if settings couldn't be loaded (either exception or null result)
+    if (_workingHoursSettings == null) {
+      print('⚠️ Using default working hours settings');
       if (widget.employee.isPartTimeEmployee) {
         _requiredHours = 4.0;
         _incompleteThreshold = 3.5;
@@ -119,18 +138,19 @@ class _EmployeeAttendanceDetailScreenState extends State<EmployeeAttendanceDetai
   }
 
   Future<void> _loadEmployeeAttendanceData() async {
-    if (widget.employee.empCode == null) {
+    if (widget.employee.empCode == null || widget.employee.empCode!.isEmpty) {
       return;
     }
 
     try {
+      final empCode = widget.employee.empCode!; // Store once for reuse
       // Get date range for selected month
       final fromDate = DateTime(widget.selectedMonth.year, widget.selectedMonth.month, 1);
       final toDate = DateTime(widget.selectedMonth.year, widget.selectedMonth.month + 1, 0);
       
       // Try to get stored records first
       final result = await _biometricService.getStoredBiometricRecords(
-        empCode: widget.employee.empCode!,
+        empCode: empCode,
         fromDate: fromDate,
         toDate: toDate,
       );
@@ -140,7 +160,7 @@ class _EmployeeAttendanceDetailScreenState extends State<EmployeeAttendanceDetai
       } else {
         // If no stored data, try to sync
         final syncResult = await _biometricService.syncBiometricData(
-          empCode: widget.employee.empCode!,
+          empCode: empCode,
           fromDate: fromDate,
           toDate: toDate,
         );
@@ -149,7 +169,7 @@ class _EmployeeAttendanceDetailScreenState extends State<EmployeeAttendanceDetai
           // Wait for consistency and get synced data
           await Future.delayed(const Duration(seconds: 2));
           final syncedResult = await _biometricService.getStoredBiometricRecords(
-            empCode: widget.employee.empCode!,
+            empCode: empCode,
             fromDate: fromDate,
             toDate: toDate,
           );
@@ -189,6 +209,11 @@ class _EmployeeAttendanceDetailScreenState extends State<EmployeeAttendanceDetai
   }
 
   Future<void> _loadLeaveData() async {
+    // Check if employee has valid empCode
+    if (widget.employee.empCode == null || widget.employee.empCode!.isEmpty) {
+      return;
+    }
+
     try {
       // Get leave requests for this specific employee
       final result = await _leaveService.getAllEmployeeLeaveRequests(
@@ -198,10 +223,14 @@ class _EmployeeAttendanceDetailScreenState extends State<EmployeeAttendanceDetai
       
       if (result.success) {
         final List<DateTime> leaveDates = [];
+        final List<DateTime> officialLeaveDates = [];
         
         for (final request in result.requests) {
           // Include approved and completed leaves
           if (request.status == 'approved' || request.status == 'completed') {
+            
+            List<DateTime> datesToAdd = [];
+            
             // Use deductionDates from the leave request if available
             if (request.deductionDates != null && request.deductionDates!.isNotEmpty) {
               // Check if the leave deduction dates fall within the selected month
@@ -211,7 +240,7 @@ class _EmployeeAttendanceDetailScreenState extends State<EmployeeAttendanceDetai
               for (final deductionDate in request.deductionDates!) {
                 // Only add if it's within the selected month
                 if (!deductionDate.isBefore(monthStart) && !deductionDate.isAfter(monthEnd)) {
-                  leaveDates.add(DateTime(deductionDate.year, deductionDate.month, deductionDate.day));
+                  datesToAdd.add(DateTime(deductionDate.year, deductionDate.month, deductionDate.day));
                 }
               }
             } else {
@@ -230,23 +259,32 @@ class _EmployeeAttendanceDetailScreenState extends State<EmployeeAttendanceDetai
                 if (!currentDate.isBefore(monthStart) && !currentDate.isAfter(monthEnd)) {
                   // Skip Sundays (weekday 7)
                   if (currentDate.weekday != 7) {
-                    leaveDates.add(DateTime(currentDate.year, currentDate.month, currentDate.day));
+                    datesToAdd.add(DateTime(currentDate.year, currentDate.month, currentDate.day));
                   }
                 }
                 currentDate = currentDate.add(const Duration(days: 1));
               }
+            }
+            
+            // Separate Official Leave (OL) from other leave types
+            if (request.leaveType == 'OL' || request.leaveType == 'officialLeave') {
+              officialLeaveDates.addAll(datesToAdd);
+            } else {
+              leaveDates.addAll(datesToAdd);
             }
           }
         }
         
         setState(() {
           _leaveDates = leaveDates;
+          _officialLeaveDates = officialLeaveDates;
         });
       }
     } catch (e) {
       print('❌ Error loading leave data: $e');
       setState(() {
         _leaveDates = [];
+        _officialLeaveDates = [];
       });
     }
   }
@@ -261,46 +299,145 @@ class _EmployeeAttendanceDetailScreenState extends State<EmployeeAttendanceDetai
     _totalWorkingDays = 0;
     _presentDays = 0;
     _absentDays = 0;
-    _lateDays = 0;
     _totalWorkingHours = 0.0;
+    
+    // Reset new detailed metrics
+    _fullDays = 0;
+    _halfDays = 0;
+    _incompleteDays = 0;
+    _leaveDays = 0;
+    _sundayPresentDays = 0;
+    _governmentHolidayPresentDays = 0;
+    _uncertainHolidayPresentDays = 0;
+    _extraPayEligibleDays = 0.0;
     
     for (int day = 1; day <= lastDayOfMonth.day; day++) {
       final date = DateTime(year, month, day);
       
-      // Check if it's a Government/Uncertain holiday
-      final isGovernmentOrUncertainHoliday = _monthHolidays.any((holiday) =>
-          (holiday.type == HolidayType.government || holiday.type == HolidayType.uncertain) &&
+      // Check if it's a government holiday (separate from uncertain)
+      final isGovernmentHoliday = _monthHolidays.any((holiday) =>
+          holiday.type == HolidayType.government &&
           holiday.date.day == day &&
           holiday.date.month == date.month &&
           holiday.date.year == date.year
       );
       
-      // Skip future dates, Sundays, and Government/Uncertain holidays
-      if (date.isAfter(today) || date.weekday == 7 || isGovernmentOrUncertainHoliday) continue;
+      // Check if it's an uncertain holiday
+      final isUncertainHoliday = _monthHolidays.any((holiday) =>
+          holiday.type == HolidayType.uncertain &&
+          holiday.date.day == day &&
+          holiday.date.month == date.month &&
+          holiday.date.year == date.year
+      );
       
-      _totalWorkingDays++;
+      // Check if it's a leave day
+      final isLeaveDay = _leaveDates.any((leaveDate) =>
+          leaveDate.day == day &&
+          leaveDate.month == date.month &&
+          leaveDate.year == date.year
+      );
       
+      // Check if it's an Official Leave (OL) day
+      final isOfficialLeaveDay = _officialLeaveDates.any((olDate) =>
+          olDate.day == day &&
+          olDate.month == date.month &&
+          olDate.year == date.year
+      );
+      
+      // Skip future dates
+      if (date.isAfter(today)) continue;
+      
+      // Get attendance data for this day
       final dayPunches = _monthPunches.where((punch) =>
         punch.dateTime.year == year &&
         punch.dateTime.month == month &&
         punch.dateTime.day == day
       ).toList();
       
-      if (dayPunches.isEmpty) {
-        _absentDays++;
-      } else {
-        _presentDays++;
+      // Handle different day types
+      if (date.weekday == 7) {
+        // Sunday - not a working day but eligible for Sunday pay
+        if (dayPunches.isNotEmpty) {
+          _sundayPresentDays++; // Track Sunday attendance count
+          
+          // Calculate Sunday eligible days (full=1.0, half=0.5) - no late/incomplete deduction
+          final dayData = _calculateDayWorkingHours(dayPunches);
+          final status = dayData['status'] as String;
+          
+          if (status == 'Full Day' || status == 'Incomplete') {
+            _extraPayEligibleDays += 1.0; // Sunday: Incomplete treated as Full Day
+          } else if (status == 'Half Day') {
+            _extraPayEligibleDays += 0.5; // Sunday: Half Day = 0.5
+          }
+        }
+      } else if (isGovernmentHoliday && dayPunches.isEmpty) {
+        // Government holiday with no attendance - not a working day
+        // No counting for government holidays when not present
+      } else if (isUncertainHoliday) {
+        // Uncertain holiday - not a working day, regardless of attendance
+        if (dayPunches.isNotEmpty) {
+          _uncertainHolidayPresentDays++; // Track uncertain holiday attendance separately
+        }
+      } else if (isGovernmentHoliday && dayPunches.isNotEmpty) {
+        // Government holiday with attendance - treat as extra pay, not regular working day
+        _governmentHolidayPresentDays++; // Track government holiday attendance
         
-        // Calculate working hours and status for this day
+        // Calculate extra pay eligible days for government holiday
         final dayData = _calculateDayWorkingHours(dayPunches);
-        _totalWorkingHours += dayData['workingHours'] as double;
+        final status = dayData['status'] as String;
         
-        // Count late days
-        if (dayData['isLate'] as bool) _lateDays++;
+        if (status == 'Full Day' || status == 'Incomplete') {
+          _extraPayEligibleDays += 1.0; // Government holiday: Incomplete treated as Full Day
+        } else if (status == 'Half Day') {
+          _extraPayEligibleDays += 0.5; // Government holiday: Half Day = 0.5
+        }
+      } else {
+        // Regular working day (not government holiday)
+        _totalWorkingDays++;
+        
+        // Check for Official Leave FIRST (takes priority over everything)
+        if (isOfficialLeaveDay) {
+          _leaveDays++; // OL counts as a paid leave day, regardless of attendance
+        } else if (dayPunches.isEmpty) {
+          // No attendance data
+          if (isLeaveDay) {
+            _leaveDays++; // Other leave types - only count as leave, not absent
+          } else {
+            _absentDays++; // Pure absent day (no leave, no attendance)
+          }
+        } else {
+          // Has attendance data and no OL on regular working day
+          _presentDays++; // Count attendance on regular working days only
+          
+          // Calculate working hours and status for this day
+          final dayData = _calculateDayWorkingHours(dayPunches);
+          _totalWorkingHours += dayData['workingHours'] as double;
+          
+          final status = dayData['status'] as String;
+          final isLate = dayData['isLate'] as bool;
+        
+          // Count detailed metrics based on status and late combination
+          if (status == 'Full Day') {
+            _fullDays++;
+            if (isLate) {
+              _incompleteDays++; // Late + Full counts as incomplete behavior
+            }
+          } else if (status == 'Half Day') {
+            _halfDays++;
+            if (isLate) {
+              _incompleteDays++; // Late + Half counts as incomplete behavior
+            }
+          } else if (status == 'Incomplete') {
+            _fullDays++; // Company policy: Incomplete is treated as Full Day
+            _incompleteDays++; // Also count as incomplete behavior
+            if (isLate) {
+              // Late + Incomplete already counted above for both metrics
+            }
+          }
+        }
       }
     }
     
-    _averageWorkingHours = _presentDays > 0 ? _totalWorkingHours / _presentDays : 0.0;
     _attendancePercentage = _totalWorkingDays > 0 ? (_presentDays / _totalWorkingDays) * 100 : 0.0;
   }
 
@@ -561,16 +698,16 @@ class _EmployeeAttendanceDetailScreenState extends State<EmployeeAttendanceDetai
           spacing: 12,
           runSpacing: 8,
           children: [
+            _buildLegendItem('OL - Official Leave', Colors.amber),
             _buildLegendItem('Full - Full Day', Colors.green),
-            _buildLegendItem('Half - Half Day', Colors.purple),
-            _buildLegendItem('Inc - Incomplete', Colors.orange),
-            _buildLegendItem('L-F - Late + Full', Colors.orange),
-            _buildLegendItem('L-H - Late + Half', Colors.purple),
-            _buildLegendItem('L-Inc - Late + Incomplete', Colors.orange),
+            _buildLegendItem('Half Day, Late + Half', Colors.purple),
+            _buildLegendItem('Incomplete, Late + Full, Late + Inc', Colors.orange),
             _buildLegendItem('Absent', Colors.red),
             _buildLegendItem('Holiday (Sunday)', Colors.blue),
-            _buildLegendItem('Holiday (Gov/Unc)', Colors.indigo),
-            _buildLegendItem('Leave (SL/PL/CL/OL/OH)', Colors.teal),
+            _buildLegendItem('Holiday (Gov)', Colors.indigo),
+            _buildLegendItem('Holiday (Uncertain)', Colors.indigo),
+            _buildLegendItem('Extra Pay (E-F/E-H)', Colors.deepPurple),
+            _buildLegendItem('Leave (SL/PL/CL/OH)', Colors.teal),
           ],
         ),
       ],
@@ -581,8 +718,17 @@ class _EmployeeAttendanceDetailScreenState extends State<EmployeeAttendanceDetai
     // Check if it's Sunday (weekday == 7)
     final isSunday = date.weekday == 7;
     
-    // Check if it's a government or uncertain holiday
-    final isGovernmentOrUncertainHoliday = _monthHolidays.any((holiday) =>
+    // Check if it's a government holiday (separate from uncertain)
+    final isGovernmentHoliday = _monthHolidays.any((holiday) =>
+        holiday.type == HolidayType.government &&
+        holiday.date.day == dayNumber &&
+        holiday.date.month == date.month &&
+        holiday.date.year == date.year
+    );
+    
+    // Check if it's an uncertain holiday
+    final isUncertainHoliday = _monthHolidays.any((holiday) =>
+        holiday.type == HolidayType.uncertain &&
         holiday.date.day == dayNumber &&
         holiday.date.month == date.month &&
         holiday.date.year == date.year
@@ -595,6 +741,14 @@ class _EmployeeAttendanceDetailScreenState extends State<EmployeeAttendanceDetai
         leaveDate.year == date.year
     );
     
+    // Check if it's an Official Leave (OL) day
+    final isOfficialLeaveDay = _officialLeaveDates.any((olDate) =>
+        olDate.day == dayNumber &&
+        olDate.month == date.month &&
+        olDate.year == date.year
+    );
+
+    
     final today = DateTime.now();
     final currentDate = DateTime(date.year, date.month, date.day);
     final todayDate = DateTime(today.year, today.month, today.day);
@@ -604,21 +758,42 @@ class _EmployeeAttendanceDetailScreenState extends State<EmployeeAttendanceDetai
     Color borderColor;
     String? statusText;
     
-    // Priority 1: Government/Uncertain Holiday (ALWAYS shows as holiday, even if employee was present)
-    if (isGovernmentOrUncertainHoliday) {
+    // Priority 1: Official Leave (OL) - Takes precedence over EVERYTHING (attendance, holidays, etc.)
+    if (isOfficialLeaveDay) {
+      backgroundColor = Colors.amber.withOpacity(0.2);
+      borderColor = Colors.amber;
+      textColor = Colors.amber[800]!;
+      statusText = 'OL';
+    } else if (isGovernmentHoliday && punches.isEmpty) {
+      // Priority 2: Government Holiday (only if no attendance)
       backgroundColor = Colors.indigo.withOpacity(0.2);
       borderColor = Colors.indigo;
       textColor = Colors.indigo[800]!;
-      statusText = 'Gov/Unc';
+      statusText = 'Gov Hol';
+    } else if (isUncertainHoliday) {
+      // Priority 3: Uncertain Holiday (ALWAYS shows as holiday, even if employee was present)
+      backgroundColor = Colors.indigo.withOpacity(0.2);
+      borderColor = Colors.indigo;
+      textColor = Colors.indigo[800]!;
+      statusText = 'Unc Hol';
     } else if (punches.isNotEmpty) {
-      // Priority 2: Check for attendance data (takes priority over employee leave/Sunday only)
+      // Priority 4: Check for attendance data (takes priority over employee leave/Sunday/Government holidays when present)
       final dayData = _calculateDayWorkingHours(punches);
       final status = dayData['status'] as String;
       final isLate = dayData['isLate'] as bool;
       
+      // Check if this is Extra Pay day (Sunday or Government Holiday with attendance)
+      final isExtraPayDay = isSunday || isGovernmentHoliday;
+      
       // Determine background color and status text
       if (status == 'Full Day') {
-        if (isLate) {
+        if (isExtraPayDay) {
+          // Extra Pay Full Day - Special styling and no late marking
+          backgroundColor = Colors.deepPurple.withOpacity(0.2);
+          borderColor = Colors.deepPurple;
+          textColor = Colors.deepPurple[800]!;
+          statusText = 'E-F'; // Extra Pay Full Day
+        } else if (isLate) {
           backgroundColor = Colors.orange.withOpacity(0.2);
           borderColor = Colors.orange;
           statusText = 'L-F'; // Late + Full Day
@@ -628,44 +803,68 @@ class _EmployeeAttendanceDetailScreenState extends State<EmployeeAttendanceDetai
           statusText = 'Full';
         }
       } else if (status == 'Half Day') {
-        backgroundColor = Colors.purple.withOpacity(0.2);
-        borderColor = Colors.purple;
-        // Combine half day and late status
-        if (isLate) {
-          statusText = 'L-H'; // Late + Half Day
+        if (isExtraPayDay) {
+          // Extra Pay Half Day - Special styling and no late marking
+          backgroundColor = Colors.deepPurple.withOpacity(0.2);
+          borderColor = Colors.deepPurple;
+          textColor = Colors.deepPurple[800]!;
+          statusText = 'E-H'; // Extra Pay Half Day
         } else {
-          statusText = 'Half';
+          backgroundColor = Colors.purple.withOpacity(0.2);
+          borderColor = Colors.purple;
+          // Combine half day and late status
+          if (isLate) {
+            statusText = 'L-H'; // Late + Half Day
+          } else {
+            statusText = 'Half';
+          }
         }
       } else if (status == 'Incomplete') {
-        backgroundColor = Colors.orange.withOpacity(0.2);
-        borderColor = Colors.orange;
-        statusText = isLate ? 'L-Inc' : 'Inc';
+        if (isExtraPayDay) {
+          // For Extra Pay days, don't show incomplete - treat as Full Day attendance
+          backgroundColor = Colors.deepPurple.withOpacity(0.2);
+          borderColor = Colors.deepPurple;
+          textColor = Colors.deepPurple[800]!;
+          statusText = 'E-F'; // Extra Pay Full Day (even if incomplete hours)
+        } else {
+          backgroundColor = Colors.orange.withOpacity(0.2);
+          borderColor = Colors.orange;
+          statusText = isLate ? 'L-Inc' : 'Inc';
+        }
       } else {
         // Any other status (like 'Total Hours')
-        backgroundColor = Colors.orange.withOpacity(0.2);
-        borderColor = Colors.orange;
-        statusText = isLate ? 'L-Oth' : 'Other';
+        if (isExtraPayDay) {
+          // For Extra Pay days, treat any attendance as Full Day
+          backgroundColor = Colors.deepPurple.withOpacity(0.2);
+          borderColor = Colors.deepPurple;
+          textColor = Colors.deepPurple[800]!;
+          statusText = 'E-F'; // Extra Pay Full Day
+        } else {
+          backgroundColor = Colors.orange.withOpacity(0.2);
+          borderColor = Colors.orange;
+          statusText = isLate ? 'L-Oth' : 'Other';
+        }
       }
     } else if (currentDate.isAfter(todayDate)) {
-      // Priority 3: Future date
+      // Priority 5: Future date
       backgroundColor = Colors.grey.withOpacity(0.1);
       borderColor = Colors.grey[300]!;
       textColor = Colors.grey[600]!;
       statusText = null; // Future dates don't need status text
     } else if (isSunday) {
-      // Priority 4: Sunday Holiday (only if no attendance and no gov/unc holiday)
+      // Priority 6: Sunday Holiday (only if no attendance and no gov/unc holiday)
       backgroundColor = Colors.blue.withOpacity(0.2);
       borderColor = Colors.blue;
       textColor = Colors.blue[800]!;
       statusText = 'Holiday';
     } else if (isLeaveDay) {
-      // Priority 5: Employee Leave (only if no attendance and no gov/unc holiday)
+      // Priority 7: Employee Leave (only if no attendance and no gov/unc holiday)
       backgroundColor = Colors.teal.withOpacity(0.2);
       borderColor = Colors.teal;
       textColor = Colors.teal[800]!;
       statusText = 'Leave';
     } else {
-      // Priority 6: No attendance data and no special status - Absent
+      // Priority 8: No attendance data and no special status - Absent
       backgroundColor = Colors.red.withOpacity(0.2);
       borderColor = Colors.red;
       textColor = Colors.red[800]!;
@@ -697,7 +896,7 @@ class _EmployeeAttendanceDetailScreenState extends State<EmployeeAttendanceDetai
                 ),
                 const SizedBox(height: 1),
                 Text(
-                  statusText ?? '',
+                  statusText,
                   style: TextStyle(
                     fontSize: 8,
                     fontWeight: FontWeight.w500,
@@ -777,7 +976,9 @@ class _EmployeeAttendanceDetailScreenState extends State<EmployeeAttendanceDetai
                         radius: 25,
                         backgroundColor: const Color(0xFF4285F4),
                         child: Text(
-                          widget.employee.initials,
+                          widget.employee.name.isNotEmpty 
+                            ? widget.employee.initials 
+                            : '?',
                           style: const TextStyle(
                             color: Colors.white,
                             fontSize: 16,
@@ -827,19 +1028,14 @@ class _EmployeeAttendanceDetailScreenState extends State<EmployeeAttendanceDetai
           SizedBox(
             // height: MediaQuery.of(context).size.height * 0.6, // Fixed height for the grid
             child: GridView.count(
-              crossAxisCount: 2,
+              crossAxisCount: 3,
               crossAxisSpacing: 12,
               mainAxisSpacing: 12,
-              childAspectRatio: 1.2,
+              childAspectRatio: .8,
               shrinkWrap: true,
               physics: const NeverScrollableScrollPhysics(),
               children: [
-                _buildMetricCard(
-                  'Attendance %',
-                  '${_attendancePercentage.toStringAsFixed(1)}%',
-                  Icons.calendar_today,
-                  _getAttendanceColor(_attendancePercentage),
-                ),
+               
                 _buildMetricCard(
                   'Present Days',
                   '$_presentDays/$_totalWorkingDays',
@@ -847,16 +1043,41 @@ class _EmployeeAttendanceDetailScreenState extends State<EmployeeAttendanceDetai
                   Colors.green,
                 ),
                 _buildMetricCard(
+                  'Late/Incomplete',
+                  _incompleteDays.toString(),
+                  Icons.access_time,
+                  Colors.orange,
+                ),
+                _buildMetricCard(
+                  'Leave Days',
+                  _leaveDays.toString(),
+                  Icons.beach_access,
+                  Colors.teal,
+                ),
+                _buildMetricCard(
+                  'Full Days',
+                  _fullDays.toString(),
+                  Icons.check_circle_outline,
+                  Colors.green,
+                ),
+                _buildMetricCard(
+                  'Half Days',
+                  _halfDays.toString(),
+                  Icons.schedule,
+                  Colors.purple,
+                ),
+               _buildMetricCard(
                   'Absent Days',
                   _absentDays.toString(),
                   Icons.cancel,
                   Colors.red,
-                ),
-                _buildMetricCard(
-                  'Late Days',
-                  _lateDays.toString(),
-                  Icons.access_time,
-                  Colors.orange,
+                ),  
+               
+                 _buildMetricCard(
+                  'Attendance %',
+                  '${_attendancePercentage.toStringAsFixed(1)}%',
+                  Icons.calendar_today,
+                  _getAttendanceColor(_attendancePercentage),
                 ),
                 _buildMetricCard(
                   'Working Hours',
@@ -865,14 +1086,19 @@ class _EmployeeAttendanceDetailScreenState extends State<EmployeeAttendanceDetai
                   Colors.blue,
                 ),
                 _buildMetricCard(
-                  'Avg Hours/Day',
-                  '${_averageWorkingHours.toStringAsFixed(1)}h',
-                  Icons.bar_chart,
-                  Colors.purple,
+                  'Extra Pay',
+                  '${_sundayPresentDays + _governmentHolidayPresentDays}',
+                  Icons.add_circle_outline,
+                  Colors.amber,
                 ),
               ],
             ),
           ),
+          
+          const SizedBox(height: 24),
+          
+          // Salary Eligibility Section
+          _buildSalaryEligibilitySection(),
         ],
       ),
     );
@@ -914,5 +1140,406 @@ class _EmployeeAttendanceDetailScreenState extends State<EmployeeAttendanceDetai
     if (percentage >= 90) return Colors.green;
     if (percentage >= 75) return Colors.orange;
     return Colors.red;
+  }
+
+  Map<String, double> _calculateSalaryEligibility() {
+    // Step 1: Calculate basic eligible days
+    double fullDaysCredit = _fullDays.toDouble();
+    double halfDaysCredit = _halfDays * 0.5; // 1 half day = 0.5 day
+    double leaveDaysCredit = _leaveDays.toDouble();
+    double extraPayDaysCredit = _extraPayEligibleDays; // Sunday + Government holiday eligible days
+    
+    // Step 2: Calculate total before deductions (excluding extra pay days)
+    double totalBeforeDeductions = fullDaysCredit + halfDaysCredit + leaveDaysCredit;
+    
+    // Step 3: Calculate Late/Incomplete deductions
+    double lateIncompleteDeduction = 0.0;
+    
+    if (_incompleteDays > 0) {
+      if (_incompleteDays <= 6) {
+        // For 1-6 late/incomplete marks: deduct full days (3 marks = 1 day, 6 marks = 2 days)
+        lateIncompleteDeduction = (_incompleteDays / 3.0).floorToDouble();
+      } else {
+        // After 6 marks: first 6 marks deduct 2 full days, then each additional mark deducts 0.5 day
+        lateIncompleteDeduction = 2.0; // First 6 marks = 2 days
+        int additionalMarks = _incompleteDays - 6;
+        lateIncompleteDeduction += additionalMarks * 0.5; // Each additional mark = 0.5 day
+      }
+    }
+    
+    // Step 4: Calculate final eligible days (regular salary days only)
+    double finalEligibleDays = totalBeforeDeductions - lateIncompleteDeduction;
+    if (finalEligibleDays < 0) finalEligibleDays = 0; // Can't be negative
+    
+    return {
+      'fullDaysCredit': fullDaysCredit,
+      'halfDaysCredit': halfDaysCredit,
+      'leaveDaysCredit': leaveDaysCredit,
+      'extraPayDaysCredit': extraPayDaysCredit,
+      'totalBeforeDeductions': totalBeforeDeductions,
+      'lateIncompleteDeduction': lateIncompleteDeduction,
+      'finalEligibleDays': finalEligibleDays,
+    };
+  }
+
+  Widget _buildSalaryEligibilitySection() {
+    final salaryData = _calculateSalaryEligibility();
+    
+    return Card(
+      margin: const EdgeInsets.all(0),
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Icon(Icons.calculate, color: Colors.blue[700], size: 24),
+                const SizedBox(width: 8),
+                Text(
+                  'Salary Eligibility Calculation',
+                  style: TextStyle(
+                    fontSize: 18,
+                    fontWeight: FontWeight.bold,
+                    color: Colors.blue[700],
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 16),
+            
+            // Addition Section
+            Container(
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: Colors.green[50],
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(color: Colors.green[200]!),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    'Credits (+)',
+                    style: TextStyle(
+                      fontSize: 16,
+                      fontWeight: FontWeight.w600,
+                      color: Colors.green[700],
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  _buildCalculationRow(
+                    'Full Days',
+                    '${_fullDays} × 1.0',
+                    '${(salaryData['fullDaysCredit'] ?? 0.0).toStringAsFixed(1)} days',
+                    Colors.green[600]!,
+                  ),
+                  _buildCalculationRow(
+                    'Half Days',
+                    '${_halfDays} × 0.5',
+                    '${(salaryData['halfDaysCredit'] ?? 0.0).toStringAsFixed(1)} days',
+                    Colors.purple[600]!,
+                  ),
+                  _buildCalculationRow(
+                    'Leave Days',
+                    '${_leaveDays} × 1.0',
+                    '${(salaryData['leaveDaysCredit'] ?? 0.0).toStringAsFixed(1)} days',
+                    Colors.teal[600]!,
+                  ),
+                  const Divider(),
+                  _buildCalculationRow(
+                    'Total Before Deductions',
+                    '',
+                    '${(salaryData['totalBeforeDeductions'] ?? 0.0).toStringAsFixed(1)} days',
+                    Colors.green[700]!,
+                    isTotal: true,
+                  ),
+                ],
+              ),
+            ),
+            
+            const SizedBox(height: 12),
+            
+            // Deduction Section
+            Container(
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: Colors.red[50],
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(color: Colors.red[200]!),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    'Deductions (-)',
+                    style: TextStyle(
+                      fontSize: 16,
+                      fontWeight: FontWeight.w600,
+                      color: Colors.red[700],
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  _buildCalculationRow(
+                    'Late/Incomplete Penalty',
+                    _buildDeductionFormula(),
+                    '${(salaryData['lateIncompleteDeduction'] ?? 0.0).toStringAsFixed(1)} days',
+                    Colors.red[600]!,
+                  ),
+                ],
+              ),
+            ),
+            
+            const SizedBox(height: 12),
+            
+            // Extra Pay Section
+            if (_extraPayEligibleDays > 0)
+              Container(
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: Colors.deepPurple[50],
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(color: Colors.deepPurple[200]!),
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        Icon(Icons.stars, color: Colors.deepPurple[700], size: 20),
+                        const SizedBox(width: 6),
+                        Text(
+                          'Extra Pay Days (Bonus)',
+                          style: TextStyle(
+                            fontSize: 16,
+                            fontWeight: FontWeight.w600,
+                            color: Colors.deepPurple[700],
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 8),
+                    if (_sundayPresentDays > 0)
+                      _buildCalculationRow(
+                        'Sunday Attendance',
+                        '${_sundayPresentDays} days present',
+                        'Extra Pay',
+                        Colors.deepPurple[600]!,
+                      ),
+                    if (_governmentHolidayPresentDays > 0)
+                      _buildCalculationRow(
+                        'Government Holiday Attendance',
+                        '${_governmentHolidayPresentDays} days present',
+                        'Extra Pay',
+                        Colors.deepPurple[600]!,
+                      ),
+                    const Divider(),
+                    _buildCalculationRow(
+                      'Total Extra Pay',
+                      '',
+                      '${(salaryData['extraPayDaysCredit'] ?? 0.0).toStringAsFixed(1)} days',
+                      Colors.deepPurple[700]!,
+                      isTotal: true,
+                    ),
+                  ],
+                ),
+              ),
+            
+            if (_extraPayEligibleDays > 0) const SizedBox(height: 12),
+            
+            // Final Result
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.all(16),
+              decoration: BoxDecoration(
+                color: Colors.blue[50],
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(color: Colors.blue[300]!, width: 2),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.center,
+                children: [
+                  Text(
+                    '${(_presentDays + _sundayPresentDays)} present days total ',
+                    style: TextStyle(
+                      fontSize: 14,
+                      color: Colors.blue[600],
+                      fontStyle: FontStyle.italic,
+                    ),
+                    textAlign: TextAlign.center,
+                  ),
+
+                  const SizedBox(height: 8),
+
+                  Text(
+                    'Final Salary Eligible Days',
+                    style: TextStyle(
+                      fontSize: 16,
+                      fontWeight: FontWeight.bold,
+                      color: Colors.blue[800],
+                    ),
+                    textAlign: TextAlign.center,
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    '${(salaryData['finalEligibleDays'] ?? 0.0).toStringAsFixed(1)} out of $_totalWorkingDays days',
+                    style: TextStyle(
+                      fontSize: 24,
+                      fontWeight: FontWeight.bold,
+                      color: Colors.blue[800],
+                    ),
+                    textAlign: TextAlign.center,
+                  ),
+                  
+                  if (_extraPayEligibleDays > 0) ...[
+                    const SizedBox(height: 8),
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                      decoration: BoxDecoration(
+                        color: Colors.deepPurple[100],
+                        borderRadius: BorderRadius.circular(12),
+                        border: Border.all(color: Colors.deepPurple[300]!),
+                      ),
+                      child: Text(
+                        '& eligible for ${_extraPayEligibleDays.toStringAsFixed(1)} extra pay days',
+                        style: TextStyle(
+                          fontSize: 14,
+                          color: Colors.deepPurple[700],
+                          fontWeight: FontWeight.w600,
+                        ),
+                        textAlign: TextAlign.center,
+                      ),
+                    ),
+                  ],
+                ],
+              ),
+            ),
+            
+            const SizedBox(height: 8),
+            
+            // Extra attendance info (if any holiday attendance - Sunday now counted in salary)
+            if (_governmentHolidayPresentDays > 0 || _uncertainHolidayPresentDays > 0)
+              Container(
+                width: double.infinity,
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: Colors.amber[50],
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(color: Colors.amber[300]!),
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        Icon(Icons.info_outline, color: Colors.amber[700], size: 16),
+                        const SizedBox(width: 6),
+                        Expanded(
+                          child: Text(
+                            'Extra Attendance (Not counted in salary)',
+                            style: TextStyle(
+                              fontSize: 14,
+                              fontWeight: FontWeight.w600,
+                              color: Colors.amber[700],
+                            ),
+                            overflow: TextOverflow.ellipsis,
+                            maxLines: 2,
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 8),
+                    if (_governmentHolidayPresentDays > 0)
+                      Text(
+                        '• Government holiday attendance: $_governmentHolidayPresentDays days',),
+                    
+                    
+                    
+            
+            const SizedBox(height: 8),
+            
+            // Formula explanation
+            Container(
+              padding: const EdgeInsets.all(8),
+              decoration: BoxDecoration(
+                color: Colors.grey[100],
+                borderRadius: BorderRadius.circular(6),
+              ),
+              child: Text(
+                'Deduction Rule: First 6 late/incomplete marks → 1 day deducted per 3 marks. After 6 marks → 0.5 day deducted per additional mark.',
+                style: TextStyle(
+                  fontSize: 12,
+                  color: Colors.grey[600],
+                  fontStyle: FontStyle.italic,
+                ),
+              ),
+            ),
+          ])
+      )]),
+      ),
+      );
+  }
+
+  Widget _buildCalculationRow(String label, String formula, String result, Color color, {bool isTotal = false}) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 4),
+      child: Row(
+        children: [
+          Expanded(
+            flex: 3,
+            child: Text(
+              label,
+              style: TextStyle(
+                fontSize: isTotal ? 16 : 14,
+                fontWeight: isTotal ? FontWeight.bold : FontWeight.w500,
+                color: color,
+              ),
+              overflow: TextOverflow.ellipsis,
+              maxLines: 2,
+            ),
+          ),
+          if (formula.isNotEmpty)
+            Expanded(
+              flex: 2,
+              child: Text(
+                formula,
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                  fontSize: 13,
+                  color: Colors.grey[600],
+                  fontFamily: 'monospace',
+                ),
+                overflow: TextOverflow.ellipsis,
+                maxLines: 1,
+              ),
+            ),
+          Expanded(
+            flex: 2,
+            child: Text(
+              result,
+              textAlign: TextAlign.right,
+              style: TextStyle(
+                fontSize: isTotal ? 16 : 14,
+                fontWeight: isTotal ? FontWeight.bold : FontWeight.w600,
+                color: color,
+              ),
+              overflow: TextOverflow.ellipsis,
+              maxLines: 1,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  String _buildDeductionFormula() {
+    if (_incompleteDays == 0) return '0 marks';
+    
+    if (_incompleteDays <= 6) {
+      return '$_incompleteDays ÷ 3';
+    } else {
+      int additionalMarks = _incompleteDays - 6;
+      return '2 + ($additionalMarks × 0.5)';
+    }
   }
 }

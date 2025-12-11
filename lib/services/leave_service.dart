@@ -1081,6 +1081,8 @@ class AdminLeaveRequest {
         return 'Optional Holiday';
       case 'LWP':
         return 'Leave Without Pay';
+      case 'OL':
+        return 'Official Leave';
       default:
         return leaveType;
     }

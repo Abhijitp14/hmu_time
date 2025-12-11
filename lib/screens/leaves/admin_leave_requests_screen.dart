@@ -535,6 +535,7 @@ class _AdminLeaveRequestsScreenState extends State<AdminLeaveRequestsScreen>
                     {'value': 'CL', 'label': 'Casual Leave'},
                     {'value': 'PL', 'label': 'Paid Leave'},
                     {'value': 'OH', 'label': 'Optional Holiday'},
+                    {'value': 'OL', 'label': 'Official Leave'},
                   ],
                   (value) {
                     setState(() {
@@ -872,6 +873,8 @@ class _AdminLeaveRequestsScreenState extends State<AdminLeaveRequestsScreen>
         return Colors.green;
       case 'OH':
         return Colors.purple;
+      case 'OL':
+        return Colors.amber;
       default:
         return Colors.grey;
     }
@@ -887,6 +890,8 @@ class _AdminLeaveRequestsScreenState extends State<AdminLeaveRequestsScreen>
         return 'Paid Leave';
       case 'OH':
         return 'Optional Holiday';
+      case 'OL':
+        return 'Official Leave';
       default:
         return leaveType;
     }
