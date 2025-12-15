@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
 import '../../../models/user_model.dart';
 import '../../../models/holiday_model.dart';
 import '../../../services/biometric_service.dart';
@@ -87,9 +88,21 @@ class _EmployeeAttendanceDetailScreenState
   final TextEditingController _salaryController = TextEditingController();
   double _enteredSalary = 0.0;
 
+  // Controllers for salary paid section
+  final TextEditingController _paidEmployeeSalaryController =
+      TextEditingController();
+  final TextEditingController _paidExtraPayController = TextEditingController();
+  DateTime? _salaryProcessedDate;
+  bool _isSavingSalaryPaid = false;
+
   @override
   void initState() {
     super.initState();
+    // Initialize salary from employee data
+    if (widget.employee.salary != null) {
+      _salaryController.text = widget.employee.salary.toString();
+      _enteredSalary = widget.employee.salary!;
+    }
     _initializeData();
   }
 
@@ -657,6 +670,8 @@ class _EmployeeAttendanceDetailScreenState
   @override
   void dispose() {
     _salaryController.dispose();
+    _paidEmployeeSalaryController.dispose();
+    _paidExtraPayController.dispose();
     super.dispose();
   }
 
@@ -1217,6 +1232,11 @@ class _EmployeeAttendanceDetailScreenState
 
           // Salary Calculator Section
           _buildSalaryCalculatorSection(),
+
+          const SizedBox(height: 24),
+
+          // Salary Paid Section
+          _buildSalaryPaidSection(),
         ],
       ),
     );
@@ -1751,8 +1771,38 @@ class _EmployeeAttendanceDetailScreenState
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
+                  // Display employee's actual salary if available
+                  if (widget.employee.salary != null) ...[
+                    Container(
+                      padding: const EdgeInsets.all(12),
+                      margin: const EdgeInsets.only(bottom: 12),
+                      decoration: BoxDecoration(
+                        color: Colors.green[50],
+                        borderRadius: BorderRadius.circular(8),
+                        border: Border.all(color: Colors.green[200]!),
+                      ),
+                      child: Row(
+                        children: [
+                          Icon(
+                            Icons.account_balance_wallet,
+                            color: Colors.green[700],
+                          ),
+                          const SizedBox(width: 8),
+                          Text(
+                            'Employee Salary: ₹${widget.employee.salary!.toStringAsFixed(0)}',
+                            style: TextStyle(
+                              fontWeight: FontWeight.w600,
+                              color: Colors.green[700],
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
                   Text(
-                    'Enter Monthly Salary (₹)',
+                    widget.employee.salary != null
+                        ? 'Salary Override (Optional)'
+                        : 'Enter Monthly Salary (₹)',
                     style: TextStyle(
                       fontSize: 16,
                       fontWeight: FontWeight.w600,
@@ -1765,11 +1815,20 @@ class _EmployeeAttendanceDetailScreenState
                     keyboardType: TextInputType.number,
                     onChanged: (value) {
                       setState(() {
-                        _enteredSalary = double.tryParse(value) ?? 0.0;
+                        if (value.isNotEmpty) {
+                          _enteredSalary = double.tryParse(value) ?? 0.0;
+                        } else if (widget.employee.salary != null) {
+                          // Use employee's actual salary if no override provided
+                          _enteredSalary = widget.employee.salary!;
+                        } else {
+                          _enteredSalary = 0.0;
+                        }
                       });
                     },
                     decoration: InputDecoration(
-                      hintText: 'Enter salary amount',
+                      hintText: widget.employee.salary != null
+                          ? 'Leave empty to use employee salary (₹${widget.employee.salary!.toStringAsFixed(0)})'
+                          : 'Enter salary amount',
                       prefixIcon: const Icon(Icons.currency_rupee),
                       border: OutlineInputBorder(
                         borderRadius: BorderRadius.circular(8),
@@ -1918,16 +1977,11 @@ class _EmployeeAttendanceDetailScreenState
                       children: [
                         Text(
                           'Total Payable:',
-                          style: TextStyle(
-                            fontSize: 18,
-                            fontWeight: FontWeight.bold,
-                            color: Colors.green[800],
-                          ),
+                          style: TextStyle(fontWeight: FontWeight.bold),
                         ),
                         Text(
                           '₹${totalSalary.toStringAsFixed(2)}',
                           style: TextStyle(
-                            fontSize: 20,
                             fontWeight: FontWeight.bold,
                             color: Colors.green[800],
                           ),
@@ -2007,4 +2061,392 @@ class _EmployeeAttendanceDetailScreenState
       ),
     );
   }
+
+  Future<void> _saveSalaryPayment() async {
+    if (_salaryProcessedDate == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Please select a salary processing date'),
+          backgroundColor: Colors.red,
+        ),
+      );
+      return;
+    }
+
+    // Get salary values
+    final employeeSalaryPaid =
+        double.tryParse(_paidEmployeeSalaryController.text) ?? 0.0;
+    final extraPayPaid = double.tryParse(_paidExtraPayController.text) ?? 0.0;
+    final totalSalaryPaid = employeeSalaryPaid + extraPayPaid;
+
+    if (totalSalaryPaid <= 0) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Please enter valid salary amounts'),
+          backgroundColor: Colors.red,
+        ),
+      );
+      return;
+    }
+
+    setState(() {
+      _isSavingSalaryPaid = true;
+    });
+
+    try {
+      // Get the month name and year for the selected attendance month
+      final monthName = _monthNames[widget.selectedMonth.month - 1];
+      final year = widget.selectedMonth.year;
+
+      // Create salary payment document
+      final salaryPaymentData = {
+        'employeeSalary': employeeSalaryPaid,
+        'salaryPaid': totalSalaryPaid,
+        'extraPay': extraPayPaid,
+        'totalSalary': totalSalaryPaid,
+        'dateProcessed': Timestamp.fromDate(_salaryProcessedDate!),
+        'month': '$monthName $year',
+        'monthYear': widget.selectedMonth, // For easier querying
+        'createdAt': FieldValue.serverTimestamp(),
+        'createdBy': 'admin', // You might want to get actual admin user ID
+      };
+
+      // Get employee document ID
+      String employeeDocId = widget.employee.id;
+      
+      print('Employee debug info:');
+      print('- ID: "${widget.employee.id}"');
+      print('- Name: "${widget.employee.name}"');
+      print('- EmpCode: "${widget.employee.empCode}"');
+      print('- Email: "${widget.employee.email}"');
+      
+      // Fallback to empCode if id is null or empty
+      if (employeeDocId.isEmpty) {
+        print('Employee ID is empty, using empCode as fallback');
+        employeeDocId = widget.employee.empCode ?? '';
+      }
+      
+      // Final validation
+      if (employeeDocId.isEmpty) {
+        throw Exception('No valid employee identifier found. Both ID and empCode are empty.');
+      }
+
+      print('Using document ID: $employeeDocId');
+
+      // Save to Firestore
+      await FirebaseFirestore.instance
+          .collection('users')
+          .doc(employeeDocId)
+          .collection('salaryCredited')
+          .add(salaryPaymentData);
+
+      if (!mounted) return;
+
+      // Clear the form
+      _paidEmployeeSalaryController.clear();
+      _paidExtraPayController.clear();
+      setState(() {
+        _salaryProcessedDate = null;
+      });
+
+      // Show success message
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Salary payment recorded for ${widget.employee.name}'),
+          backgroundColor: Colors.green,
+        ),
+      );
+    } catch (e) {
+      print('Error saving salary payment: $e');
+      if (!mounted) return;
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Failed to save salary payment: ${e.toString()}'),
+          backgroundColor: Colors.red,
+        ),
+      );
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isSavingSalaryPaid = false;
+        });
+      }
+    }
+  }
+
+  Future<void> _selectSalaryProcessedDate(BuildContext context) async {
+    final DateTime? picked = await showDatePicker(
+      context: context,
+      initialDate: _salaryProcessedDate ?? DateTime.now(),
+      firstDate: DateTime(2020),
+      lastDate: DateTime.now().add(const Duration(days: 365)),
+      builder: (context, child) {
+        return Theme(
+          data: Theme.of(context).copyWith(
+            colorScheme: Theme.of(context).colorScheme.copyWith(
+              primary: const Color(0xFF4285F4),
+              onPrimary: Colors.white,
+              surface: Colors.white,
+              onSurface: Colors.black87,
+            ),
+          ),
+          child: child!,
+        );
+      },
+    );
+
+    if (picked != null && picked != _salaryProcessedDate) {
+      setState(() {
+        _salaryProcessedDate = picked;
+      });
+    }
+  }
+
+  Widget _buildSalaryPaidSection() {
+    final salaryData = _calculateSalaryEligibility();
+    final totalDaysInMonth = DateTime(
+      widget.selectedMonth.year,
+      widget.selectedMonth.month + 1,
+      0,
+    ).day;
+    final finalEligibleDays = salaryData['finalEligibleDays'] ?? 0.0;
+    final extraPayDays = salaryData['extraPayDaysCredit'] ?? 0.0;
+
+    // Calculate per day rate
+    final perDayRate = _enteredSalary > 0
+        ? _enteredSalary / totalDaysInMonth
+        : 0.0;
+
+    // Calculate employee salary based on eligible days
+    final calculatedEmployeeSalary = perDayRate * finalEligibleDays;
+
+    // Calculate extra pay
+    final calculatedExtraPay = perDayRate * extraPayDays;
+
+    // Initialize controllers if empty and we have calculated values
+    if (_paidEmployeeSalaryController.text.isEmpty &&
+        calculatedEmployeeSalary > 0) {
+      _paidEmployeeSalaryController.text = calculatedEmployeeSalary
+          .toStringAsFixed(2);
+    }
+    if (_paidExtraPayController.text.isEmpty && calculatedExtraPay > 0) {
+      _paidExtraPayController.text = calculatedExtraPay.toStringAsFixed(2);
+    }
+
+    return Card(
+      margin: const EdgeInsets.all(0),
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Icon(Icons.payment, color: Colors.blue[700], size: 24),
+                const SizedBox(width: 8),
+                Text(
+                  'Salary Paid',
+                  style: TextStyle(
+                    fontSize: 18,
+                    fontWeight: FontWeight.bold,
+                    color: Colors.blue[700],
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 16),
+
+            // Employee Salary Field
+            TextFormField(
+              controller: _paidEmployeeSalaryController,
+              keyboardType: TextInputType.number,
+              decoration: InputDecoration(
+                labelText: 'Employee Salary',
+                hintText: 'Enter paid salary amount',
+                prefixIcon: const Icon(Icons.currency_rupee),
+                border: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                helperText: calculatedEmployeeSalary > 0
+                    ? 'Calculated: ₹${calculatedEmployeeSalary.toStringAsFixed(2)}'
+                    : null,
+              ),
+            ),
+            const SizedBox(height: 16),
+
+            // Extra Pay Field
+            TextFormField(
+              controller: _paidExtraPayController,
+              keyboardType: TextInputType.number,
+              decoration: InputDecoration(
+                labelText: 'Extra Pay',
+                hintText: 'Enter extra pay amount (optional)',
+                prefixIcon: const Icon(Icons.add_circle_outline),
+                border: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                helperText: calculatedExtraPay > 0
+                    ? 'Calculated: ₹${calculatedExtraPay.toStringAsFixed(2)}'
+                    : 'For Sunday/holiday work',
+              ),
+            ),
+            const SizedBox(height: 16),
+
+            // Date Processed Field
+            Text(
+              'Date Processed',
+              style: TextStyle(
+                fontSize: 16,
+                fontWeight: FontWeight.w600,
+                color: Colors.grey[700],
+              ),
+            ),
+            const SizedBox(height: 8),
+            InkWell(
+              onTap: () => _selectSalaryProcessedDate(context),
+              child: Container(
+                width: double.infinity,
+                padding: const EdgeInsets.all(16),
+                decoration: BoxDecoration(
+                  border: Border.all(color: Colors.grey[300]!),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Row(
+                  children: [
+                    Icon(Icons.calendar_today, color: Colors.grey[600]),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Text(
+                        _salaryProcessedDate != null
+                            ? '${_salaryProcessedDate!.day}/${_salaryProcessedDate!.month}/${_salaryProcessedDate!.year}'
+                            : 'Select date when salary was/will be processed',
+                        style: TextStyle(
+                          color: _salaryProcessedDate != null
+                              ? Colors.black87
+                              : Colors.grey[600],
+                        ),
+                      ),
+                    ),
+                    Icon(Icons.arrow_drop_down, color: Colors.grey[600]),
+                  ],
+                ),
+              ),
+            ),
+
+            const SizedBox(height: 24),
+
+            // Save Button
+            SizedBox(
+              width: double.infinity,
+              child: ElevatedButton(
+                onPressed: _isSavingSalaryPaid ? null : _saveSalaryPayment,
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: Colors.blue[600],
+                  foregroundColor: Colors.white,
+                  padding: const EdgeInsets.symmetric(vertical: 16),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                ),
+                child: _isSavingSalaryPaid
+                    ? const Row(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          SizedBox(
+                            width: 20,
+                            height: 20,
+                            child: CircularProgressIndicator(
+                              color: Colors.white,
+                              strokeWidth: 2,
+                            ),
+                          ),
+                          SizedBox(width: 8),
+                          Text('Saving...'),
+                        ],
+                      )
+                    : Row(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          const Icon(Icons.save, size: 20),
+                          const SizedBox(width: 8),
+                          Text(
+                            'Save Salary Payment',
+                            style: TextStyle(
+                              fontSize: 16,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                        ],
+                      ),
+              ),
+            ),
+
+            const SizedBox(height: 12),
+
+            // Summary
+            Container(
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: Colors.blue[50],
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(color: Colors.blue[200]!),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    'Summary for ${_monthNames[widget.selectedMonth.month - 1]} ${widget.selectedMonth.year}',
+                    style: TextStyle(
+                      fontSize: 14,
+                      fontWeight: FontWeight.w600,
+                      color: Colors.blue[700],
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      Text('Employee Salary:'),
+                      Text(
+                        '₹${_paidEmployeeSalaryController.text.isEmpty ? "0.00" : double.tryParse(_paidEmployeeSalaryController.text)?.toStringAsFixed(2) ?? "0.00"}',
+                      ),
+                    ],
+                  ),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      Text('Extra Pay:'),
+                      Text(
+                        '₹${_paidExtraPayController.text.isEmpty ? "0.00" : double.tryParse(_paidExtraPayController.text)?.toStringAsFixed(2) ?? "0.00"}',
+                      ),
+                    ],
+                  ),
+                  const Divider(height: 16),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      Text(
+                        'Total Salary:',
+                        style: TextStyle(fontWeight: FontWeight.bold),
+                      ),
+                      Text(
+                        '₹${((double.tryParse(_paidEmployeeSalaryController.text) ?? 0.0) + (double.tryParse(_paidExtraPayController.text) ?? 0.0)).toStringAsFixed(2)}',
+                        style: TextStyle(
+                          fontWeight: FontWeight.bold,
+                          color: Colors.blue[700],
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  // ...existing code...
 }
