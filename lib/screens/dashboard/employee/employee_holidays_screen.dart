@@ -14,13 +14,13 @@ class EmployeeHolidaysScreen extends StatefulWidget {
 
 class _EmployeeHolidaysScreenState extends State<EmployeeHolidaysScreen> {
   final HolidayService _holidayService = HolidayService();
-  
+
   DateTime _focusedDay = DateTime.now();
   DateTime? _selectedDay;
   List<Holiday> _allHolidays = [];
   List<Holiday> _monthHolidays = [];
   bool _isLoading = true;
-  
+
   @override
   void initState() {
     super.initState();
@@ -45,9 +45,10 @@ class _EmployeeHolidaysScreenState extends State<EmployeeHolidaysScreen> {
 
   void _filterHolidaysForMonth(DateTime month) {
     final monthHolidays = _allHolidays.where((holiday) {
-      return holiday.date.year == month.year && holiday.date.month == month.month;
+      return holiday.date.year == month.year &&
+          holiday.date.month == month.month;
     }).toList();
-    
+
     setState(() {
       _monthHolidays = monthHolidays;
     });
@@ -55,10 +56,7 @@ class _EmployeeHolidaysScreenState extends State<EmployeeHolidaysScreen> {
 
   void _showErrorSnackBar(String message) {
     ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(message),
-        backgroundColor: AppColors.error,
-      ),
+      SnackBar(content: Text(message), backgroundColor: AppColors.error),
     );
   }
 
@@ -86,13 +84,23 @@ class _EmployeeHolidaysScreenState extends State<EmployeeHolidaysScreen> {
               child: SingleChildScrollView(
                 physics: const AlwaysScrollableScrollPhysics(),
                 child: SizedBox(
-                  height: MediaQuery.of(context).size.height - 160, // Adjust for AppBar
-                  child: Column(
-                    children: [
-                      _buildCalendar(),
-                      Expanded(child: _buildHolidaysList()),
-                    ],
-                  ),
+                  height:
+                      MediaQuery.of(context).size.height -
+                      160, // Adjust for AppBar
+                  child: MediaQuery.of(context).size.width > 600
+                      ? Row(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Expanded(flex: 2, child: _buildCalendar()),
+                            Expanded(flex: 3, child: _buildHolidaysList()),
+                          ],
+                        )
+                      : Column(
+                          children: [
+                            _buildCalendar(),
+                            Expanded(child: _buildHolidaysList()),
+                          ],
+                        ),
                 ),
               ),
             ),
@@ -100,8 +108,12 @@ class _EmployeeHolidaysScreenState extends State<EmployeeHolidaysScreen> {
   }
 
   Widget _buildCalendar() {
+    final isWideScreen = MediaQuery.of(context).size.width > 600;
+
     return Container(
-      margin: const EdgeInsets.all(16),
+      margin: isWideScreen
+          ? const EdgeInsets.fromLTRB(16, 16, 8, 16)
+          : const EdgeInsets.all(16),
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
         color: Colors.white,
@@ -177,14 +189,8 @@ class _EmployeeHolidaysScreenState extends State<EmployeeHolidaysScreen> {
             fontSize: 18,
             fontWeight: FontWeight.bold,
           ),
-          leftChevronIcon: Icon(
-            Icons.chevron_left,
-            color: AppColors.primary,
-          ),
-          rightChevronIcon: Icon(
-            Icons.chevron_right,
-            color: AppColors.primary,
-          ),
+          leftChevronIcon: Icon(Icons.chevron_left, color: AppColors.primary),
+          rightChevronIcon: Icon(Icons.chevron_right, color: AppColors.primary),
         ),
         onDaySelected: (selectedDay, focusedDay) {
           setState(() {
@@ -203,8 +209,12 @@ class _EmployeeHolidaysScreenState extends State<EmployeeHolidaysScreen> {
   }
 
   Widget _buildHolidaysList() {
+    final isWideScreen = MediaQuery.of(context).size.width > 600;
+
     return Container(
-      margin: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+      margin: isWideScreen
+          ? const EdgeInsets.fromLTRB(8, 16, 16, 16)
+          : const EdgeInsets.fromLTRB(16, 0, 16, 16),
       decoration: BoxDecoration(
         color: Colors.white,
         borderRadius: BorderRadius.circular(12),
@@ -223,11 +233,7 @@ class _EmployeeHolidaysScreenState extends State<EmployeeHolidaysScreen> {
             padding: const EdgeInsets.all(16),
             child: Row(
               children: [
-                Icon(
-                  Icons.event_note,
-                  color: AppColors.primary,
-                  size: 24,
-                ),
+                Icon(Icons.event_note, color: AppColors.primary, size: 24),
                 const SizedBox(width: 8),
                 Text(
                   'Holidays in ${DateFormat('MMMM yyyy').format(_focusedDay)}',
@@ -262,11 +268,7 @@ class _EmployeeHolidaysScreenState extends State<EmployeeHolidaysScreen> {
       child: Column(
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
-          Icon(
-            Icons.event_busy,
-            size: 64,
-            color: Colors.grey[400],
-          ),
+          Icon(Icons.event_busy, size: 64, color: Colors.grey[400]),
           const SizedBox(height: 16),
           Text(
             'No holidays in ${DateFormat('MMMM yyyy').format(_focusedDay)}',
@@ -279,10 +281,7 @@ class _EmployeeHolidaysScreenState extends State<EmployeeHolidaysScreen> {
           const SizedBox(height: 8),
           Text(
             'Enjoy your regular work days!',
-            style: TextStyle(
-              fontSize: 14,
-              color: Colors.grey[500],
-            ),
+            style: TextStyle(fontSize: 14, color: Colors.grey[500]),
           ),
         ],
       ),
@@ -292,14 +291,12 @@ class _EmployeeHolidaysScreenState extends State<EmployeeHolidaysScreen> {
   Widget _buildHolidayCard(Holiday holiday) {
     final isUpcoming = holiday.date.isAfter(DateTime.now());
     final daysDifference = holiday.date.difference(DateTime.now()).inDays;
-    
+
     return Container(
       margin: const EdgeInsets.only(bottom: 12),
       child: Card(
         elevation: 2,
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(8),
-        ),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
         child: Padding(
           padding: const EdgeInsets.all(16),
           child: Row(
@@ -319,7 +316,7 @@ class _EmployeeHolidaysScreenState extends State<EmployeeHolidaysScreen> {
                 ),
               ),
               const SizedBox(width: 16),
-              
+
               // Holiday Details
               Expanded(
                 child: Column(
@@ -335,19 +332,13 @@ class _EmployeeHolidaysScreenState extends State<EmployeeHolidaysScreen> {
                     const SizedBox(height: 4),
                     Text(
                       DateFormat('EEEE, MMM dd, yyyy').format(holiday.date),
-                      style: TextStyle(
-                        fontSize: 14,
-                        color: Colors.grey[600],
-                      ),
+                      style: TextStyle(fontSize: 14, color: Colors.grey[600]),
                     ),
                     if (holiday.description?.isNotEmpty ?? false) ...[
                       const SizedBox(height: 4),
                       Text(
                         holiday.description!,
-                        style: TextStyle(
-                          fontSize: 12,
-                          color: Colors.grey[500],
-                        ),
+                        style: TextStyle(fontSize: 12, color: Colors.grey[500]),
                         maxLines: 2,
                         overflow: TextOverflow.ellipsis,
                       ),
@@ -355,13 +346,16 @@ class _EmployeeHolidaysScreenState extends State<EmployeeHolidaysScreen> {
                   ],
                 ),
               ),
-              
+
               // Holiday Status
               Column(
                 crossAxisAlignment: CrossAxisAlignment.end,
                 children: [
                   Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 8,
+                      vertical: 4,
+                    ),
                     decoration: BoxDecoration(
                       color: _getHolidayColor(holiday.type),
                       borderRadius: BorderRadius.circular(4),
@@ -381,21 +375,20 @@ class _EmployeeHolidaysScreenState extends State<EmployeeHolidaysScreen> {
                       daysDifference == 0
                           ? 'Today'
                           : daysDifference == 1
-                              ? 'Tomorrow'
-                              : 'In $daysDifference days',
+                          ? 'Tomorrow'
+                          : 'In $daysDifference days',
                       style: TextStyle(
                         fontSize: 12,
-                        color: daysDifference <= 7 ? AppColors.primary : Colors.grey[600],
+                        color: daysDifference <= 7
+                            ? AppColors.primary
+                            : Colors.grey[600],
                         fontWeight: FontWeight.w500,
                       ),
                     ),
                   ] else if (!isUpcoming) ...[
                     Text(
                       'Past',
-                      style: TextStyle(
-                        fontSize: 12,
-                        color: Colors.grey[500],
-                      ),
+                      style: TextStyle(fontSize: 12, color: Colors.grey[500]),
                     ),
                   ],
                 ],

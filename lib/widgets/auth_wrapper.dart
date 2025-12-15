@@ -27,13 +27,13 @@ class _AuthWrapperState extends State<AuthWrapper> {
         if (snapshot.connectionState == ConnectionState.waiting) {
           return const SplashScreen();
         }
-        
+
         // Handle connection errors
         if (snapshot.hasError) {
           print('Auth stream error: ${snapshot.error}');
           return const EmployeeLoginScreen();
         }
-        
+
         // User is authenticated
         if (snapshot.hasData && snapshot.data != null && !_hasSignedOut) {
           return FutureBuilder<AppUser?>(
@@ -42,20 +42,20 @@ class _AuthWrapperState extends State<AuthWrapper> {
               if (userSnapshot.connectionState == ConnectionState.waiting) {
                 return const SplashScreen();
               }
-              
+
               // Handle errors in user data loading
               if (userSnapshot.hasError) {
                 print('Error loading user data: ${userSnapshot.error}');
                 _signOutSafely();
                 return const EmployeeLoginScreen();
               }
-              
+
               if (userSnapshot.hasData && userSnapshot.data != null) {
                 final user = userSnapshot.data!;
-                
+
                 // Route based on user role
-                if (user.role == UserRole.admin || 
-                    user.role == UserRole.hr || 
+                if (user.role == UserRole.admin ||
+                    user.role == UserRole.hr ||
                     user.role == UserRole.manager) {
                   return AdminDashboardScreen(user: user);
                 } else if (user.role == UserRole.employee) {
@@ -66,7 +66,7 @@ class _AuthWrapperState extends State<AuthWrapper> {
                   return const EmployeeLoginScreen();
                 }
               }
-              
+
               // If no valid user data, show login
               print('No valid user data found, signing out');
               _signOutSafely();
@@ -74,7 +74,7 @@ class _AuthWrapperState extends State<AuthWrapper> {
             },
           );
         }
-        
+
         // No authenticated user or user signed out
         _hasSignedOut = false; // Reset flag for next login
         return const EmployeeLoginScreen();

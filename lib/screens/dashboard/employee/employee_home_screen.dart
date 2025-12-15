@@ -1,4 +1,6 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/foundation.dart';
+import 'package:flutter/gestures.dart';
 import 'package:intl/intl.dart';
 import 'package:lottie/lottie.dart';
 import '../../../models/user_model.dart';
@@ -87,11 +89,21 @@ class _EmployeeHomeScreenState extends State<EmployeeHomeScreen> {
   // Calendar expansion state
   bool _isCalendarExpanded = false;
 
+  // Scroll controller for date selector
+  late ScrollController _dateScrollController;
+
   @override
   void initState() {
     super.initState();
+    _dateScrollController = ScrollController();
     _calculateAvailableMonths();
     _initializeData();
+  }
+
+  @override
+  void dispose() {
+    _dateScrollController.dispose();
+    super.dispose();
   }
 
   Future<void> _initializeData() async {
@@ -1731,35 +1743,58 @@ class _EmployeeHomeScreenState extends State<EmployeeHomeScreen> {
           ),
           const SizedBox(height: 8),
           Expanded(
-            child: ListView.builder(
-              scrollDirection: Axis.horizontal,
-              itemCount: displayDays.length,
-              itemBuilder: (context, index) {
-                final date = displayDays[index];
-                final isToday =
-                    date.day == today.day &&
-                    date.month == today.month &&
-                    date.year == today.year;
-                final isSelected =
-                    date.day == _selectedDate.day &&
-                    date.month == _selectedDate.month &&
-                    date.year == _selectedDate.year;
+            child: Scrollbar(
+              controller: _dateScrollController,
+              thumbVisibility: kIsWeb,
+              child: Listener(
+                onPointerSignal: kIsWeb
+                    ? (pointerSignal) {
+                        if (pointerSignal is PointerScrollEvent) {
+                          // Handle horizontal scrolling with mouse wheel on web
+                          final delta = pointerSignal.scrollDelta.dy;
+                          _dateScrollController.animateTo(
+                            _dateScrollController.offset + (delta * 2),
+                            duration: const Duration(milliseconds: 100),
+                            curve: Curves.easeOut,
+                          );
+                        }
+                      }
+                    : null,
+                child: ListView.builder(
+                  controller: _dateScrollController,
+                  scrollDirection: Axis.horizontal,
+                  physics: kIsWeb
+                      ? const AlwaysScrollableScrollPhysics()
+                      : const BouncingScrollPhysics(),
+                  itemCount: displayDays.length,
+                  itemBuilder: (context, index) {
+                    final date = displayDays[index];
+                    final isToday =
+                        date.day == today.day &&
+                        date.month == today.month &&
+                        date.year == today.year;
+                    final isSelected =
+                        date.day == _selectedDate.day &&
+                        date.month == _selectedDate.month &&
+                        date.year == _selectedDate.year;
 
-                return Container(
-                  width: screenSize.width * 0.18,
-                  padding: const EdgeInsets.only(bottom: 4),
-                  margin: const EdgeInsets.only(right: 12),
-                  child: GestureDetector(
-                    onTap: () => _onDateSelected(date),
-                    child: _buildDateCard(
-                      date.day.toString(),
-                      DateFormat('EEE').format(date),
-                      isToday,
-                      isSelected: isSelected,
-                    ),
-                  ),
-                );
-              },
+                    return Container(
+                      width: screenSize.width * 0.18,
+                      padding: const EdgeInsets.only(bottom: 4),
+                      margin: const EdgeInsets.only(right: 12),
+                      child: GestureDetector(
+                        onTap: () => _onDateSelected(date),
+                        child: _buildDateCard(
+                          date.day.toString(),
+                          DateFormat('EEE').format(date),
+                          isToday,
+                          isSelected: isSelected,
+                        ),
+                      ),
+                    );
+                  },
+                ),
+              ),
             ),
           ),
         ],
