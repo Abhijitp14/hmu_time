@@ -27,12 +27,20 @@ class _AddEmployeeScreenState extends State<AddEmployeeScreen> {
   final _paidLeaveController = TextEditingController(text: '6');
   final _optionalHolidayController = TextEditingController(text: '3');
   final _workingHoursController = TextEditingController(text: '8:00');
-  
+  final _salaryController = TextEditingController();
+
   bool _isLoading = false;
   String? _errorMessage;
   DateTime? _selectedJoiningDate;
   DateTime? _selectedDateOfBirth;
   TimeOfDay? _selectedWorkingHours = const TimeOfDay(hour: 8, minute: 0);
+
+  // Company options
+  final List<String> _companies = [
+    'Urban Acres Infomediatech Pvt. Ltd',
+    'Media Guardians Pvt. Ltd.',
+    'Ecorenew Homes & Buildings Infomedia Pvt. Ltd.',
+  ];
 
   // Department options (you can customize these)
   final List<String> _departments = [
@@ -57,6 +65,7 @@ class _AddEmployeeScreenState extends State<AddEmployeeScreen> {
 
   String? _selectedDepartment;
   String? _selectedEmploymentType;
+  String? _selectedCompany;
 
   @override
   void dispose() {
@@ -72,6 +81,7 @@ class _AddEmployeeScreenState extends State<AddEmployeeScreen> {
     _paidLeaveController.dispose();
     _optionalHolidayController.dispose();
     _workingHoursController.dispose();
+    _salaryController.dispose();
     super.dispose();
   }
 
@@ -90,7 +100,8 @@ class _AddEmployeeScreenState extends State<AddEmployeeScreen> {
     final department = _selectedDepartment ?? _departmentController.text.trim();
     if (department.isEmpty) {
       setState(() {
-        _errorMessage = 'Please select a department or enter a custom department';
+        _errorMessage =
+            'Please select a department or enter a custom department';
       });
       return;
     }
@@ -102,25 +113,34 @@ class _AddEmployeeScreenState extends State<AddEmployeeScreen> {
 
     try {
       final employeeService = EmployeeService();
-      
+
       final result = await employeeService.createEmployee(
         name: _nameController.text.trim(),
         email: _emailController.text.trim().toLowerCase(),
         empCode: _empCodeController.text.trim(),
         department: _selectedDepartment ?? _departmentController.text.trim(),
-        designation: _designationController.text.trim().isEmpty ? null : _designationController.text.trim(),
+        designation: _designationController.text.trim().isEmpty
+            ? null
+            : _designationController.text.trim(),
         joiningDate: _selectedJoiningDate,
-        phoneNumber: _phoneController.text.trim().isEmpty ? null : _phoneController.text.trim(),
+        phoneNumber: _phoneController.text.trim().isEmpty
+            ? null
+            : _phoneController.text.trim(),
         dateOfBirth: _selectedDateOfBirth,
-        address: _addressController.text.trim().isEmpty ? null : _addressController.text.trim(),
+        address: _addressController.text.trim().isEmpty
+            ? null
+            : _addressController.text.trim(),
         sickLeave: int.tryParse(_sickLeaveController.text) ?? 6,
         casualLeave: int.tryParse(_casualLeaveController.text) ?? 6,
         paidLeave: int.tryParse(_paidLeaveController.text) ?? 6,
         optionalHoliday: int.tryParse(_optionalHolidayController.text) ?? 3,
         employmentType: _selectedEmploymentType,
-        workingHours: _selectedWorkingHours != null 
-            ? _selectedWorkingHours!.hour + (_selectedWorkingHours!.minute / 60.0)
+        workingHours: _selectedWorkingHours != null
+            ? _selectedWorkingHours!.hour +
+                  (_selectedWorkingHours!.minute / 60.0)
             : null,
+        salary: double.tryParse(_salaryController.text.trim()),
+        companyName: _selectedCompany,
       );
 
       if (!mounted) return;
@@ -129,13 +149,17 @@ class _AddEmployeeScreenState extends State<AddEmployeeScreen> {
         // Store values before clearing form
         final employeeName = _nameController.text;
         final employeeEmail = _emailController.text;
-        
+
         // Clear form after successful creation
         _clearForm();
-        
+
         // Show password dialog to admin
         if (result.tempPassword != null) {
-          _showPasswordDialog(result.tempPassword!, employeeName, employeeEmail);
+          _showPasswordDialog(
+            result.tempPassword!,
+            employeeName,
+            employeeEmail,
+          );
         } else {
           // Show success message if no password returned
           ScaffoldMessenger.of(context).showSnackBar(
@@ -170,7 +194,9 @@ class _AddEmployeeScreenState extends State<AddEmployeeScreen> {
       context: context,
       initialDate: _selectedJoiningDate ?? DateTime.now(),
       firstDate: DateTime(2000),
-      lastDate: DateTime.now().add(const Duration(days: 365)), // Allow future dates up to 1 year
+      lastDate: DateTime.now().add(
+        const Duration(days: 365),
+      ), // Allow future dates up to 1 year
       builder: (context, child) {
         return Theme(
           data: Theme.of(context).copyWith(
@@ -269,7 +295,9 @@ class _AddEmployeeScreenState extends State<AddEmployeeScreen> {
               Navigator.pop(context);
               final TimeOfDay? picked = await showTimePicker(
                 context: context,
-                initialTime: _selectedWorkingHours ?? const TimeOfDay(hour: 8, minute: 0),
+                initialTime:
+                    _selectedWorkingHours ??
+                    const TimeOfDay(hour: 8, minute: 0),
                 helpText: 'Select Working Hours',
                 builder: (context, child) {
                   return Theme(
@@ -282,9 +310,9 @@ class _AddEmployeeScreenState extends State<AddEmployeeScreen> {
                       ),
                     ),
                     child: MediaQuery(
-                      data: MediaQuery.of(context).copyWith(
-                        alwaysUse24HourFormat: true,
-                      ),
+                      data: MediaQuery.of(
+                        context,
+                      ).copyWith(alwaysUse24HourFormat: true),
                       child: child!,
                     ),
                   );
@@ -294,7 +322,8 @@ class _AddEmployeeScreenState extends State<AddEmployeeScreen> {
               if (picked != null && picked != _selectedWorkingHours) {
                 setState(() {
                   _selectedWorkingHours = picked;
-                  _workingHoursController.text = '${picked.hour}:${picked.minute.toString().padLeft(2, '0')}';
+                  _workingHoursController.text =
+                      '${picked.hour}:${picked.minute.toString().padLeft(2, '0')}';
                 });
               }
             },
@@ -330,6 +359,7 @@ class _AddEmployeeScreenState extends State<AddEmployeeScreen> {
     _phoneController.clear();
     _designationController.clear();
     _addressController.clear();
+    _salaryController.clear();
     _sickLeaveController.text = '6';
     _casualLeaveController.text = '6';
     _paidLeaveController.text = '6';
@@ -338,6 +368,7 @@ class _AddEmployeeScreenState extends State<AddEmployeeScreen> {
     setState(() {
       _selectedDepartment = null;
       _selectedEmploymentType = null;
+      _selectedCompany = null;
       _selectedJoiningDate = null;
       _selectedDateOfBirth = null;
       _selectedWorkingHours = const TimeOfDay(hour: 8, minute: 0);
@@ -345,7 +376,11 @@ class _AddEmployeeScreenState extends State<AddEmployeeScreen> {
     });
   }
 
-  void _showPasswordDialog(String password, String employeeName, String employeeEmail) {
+  void _showPasswordDialog(
+    String password,
+    String employeeName,
+    String employeeEmail,
+  ) {
     showDialog(
       context: context,
       barrierDismissible: false, // Prevent dismissing by tapping outside
@@ -442,21 +477,23 @@ class _AddEmployeeScreenState extends State<AddEmployeeScreen> {
                   Expanded(
                     child: Text(
                       'Please share this password securely with the employee. They will be required to change it on first login.',
-                      style: AppTextStyles.bodySmall.copyWith(color: Colors.orange.shade700),
+                      style: AppTextStyles.bodySmall.copyWith(
+                        color: Colors.orange.shade700,
+                      ),
                     ),
                   ),
                 ],
               ),
             ),
             const SizedBox(height: 16),
-            Text(
-              'Employee Details:',
-              style: AppTextStyles.labelMedium,
-            ),
+            Text('Employee Details:', style: AppTextStyles.labelMedium),
             const SizedBox(height: 8),
             Text('• Email: $employeeEmail', style: AppTextStyles.bodySmall),
             Text('• Name: $employeeName', style: AppTextStyles.bodySmall),
-            Text('• Must change password on first login', style: AppTextStyles.bodySmall),
+            Text(
+              '• Must change password on first login',
+              style: AppTextStyles.bodySmall,
+            ),
           ],
         ),
         actions: [
@@ -494,10 +531,7 @@ class _AddEmployeeScreenState extends State<AddEmployeeScreen> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Text(
-                'Create New Employee Account',
-                style: AppTextStyles.h2,
-              ),
+              Text('Create New Employee Account', style: AppTextStyles.h2),
               const SizedBox(height: 8),
               Text(
                 'Fill in the employee details to create their account',
@@ -573,7 +607,10 @@ class _AddEmployeeScreenState extends State<AddEmployeeScreen> {
                 value: _selectedDepartment,
                 decoration: InputDecoration(
                   hintText: 'Select department',
-                  prefixIcon: Icon(Icons.business_outlined, color: AppColors.textSecondary),
+                  prefixIcon: Icon(
+                    Icons.business_outlined,
+                    color: AppColors.textSecondary,
+                  ),
                   border: OutlineInputBorder(
                     borderRadius: BorderRadius.circular(12),
                     borderSide: BorderSide(color: AppColors.borderLight),
@@ -631,7 +668,10 @@ class _AddEmployeeScreenState extends State<AddEmployeeScreen> {
                 value: _selectedEmploymentType,
                 decoration: InputDecoration(
                   hintText: 'Select employment type',
-                  prefixIcon: Icon(Icons.work_history_outlined, color: AppColors.textSecondary),
+                  prefixIcon: Icon(
+                    Icons.work_history_outlined,
+                    color: AppColors.textSecondary,
+                  ),
                   border: OutlineInputBorder(
                     borderRadius: BorderRadius.circular(12),
                     borderSide: BorderSide(color: AppColors.borderLight),
@@ -673,7 +713,9 @@ class _AddEmployeeScreenState extends State<AddEmployeeScreen> {
                   padding: const EdgeInsets.all(16),
                   decoration: BoxDecoration(
                     border: Border.all(
-                      color: _selectedWorkingHours == null && _errorMessage?.contains('working hours') == true
+                      color:
+                          _selectedWorkingHours == null &&
+                              _errorMessage?.contains('working hours') == true
                           ? Colors.red.shade300
                           : AppColors.borderLight,
                     ),
@@ -701,11 +743,17 @@ class _AddEmployeeScreenState extends State<AddEmployeeScreen> {
                       ),
                       if (_selectedWorkingHours != null)
                         IconButton(
-                          icon: Icon(Icons.clear, color: AppColors.textSecondary),
+                          icon: Icon(
+                            Icons.clear,
+                            color: AppColors.textSecondary,
+                          ),
                           onPressed: () {
                             setState(() {
                               // Reset to default 8:00 instead of null to avoid validation issues
-                              _selectedWorkingHours = const TimeOfDay(hour: 8, minute: 0);
+                              _selectedWorkingHours = const TimeOfDay(
+                                hour: 8,
+                                minute: 0,
+                              );
                               _workingHoursController.text = '8:00';
                             });
                           },
@@ -728,7 +776,11 @@ class _AddEmployeeScreenState extends State<AddEmployeeScreen> {
                     borderRadius: BorderRadius.circular(6),
                   ),
                   child: Text(
-                    'Default for $_selectedEmploymentType: ${_selectedEmploymentType == 'Full Time' ? '8:00' : _selectedEmploymentType == 'Part Time' ? '5:00' : '2:30'} hours',
+                    'Default for $_selectedEmploymentType: ${_selectedEmploymentType == 'Full Time'
+                        ? '8:00'
+                        : _selectedEmploymentType == 'Part Time'
+                        ? '5:00'
+                        : '2:30'} hours',
                     style: AppTextStyles.bodySmall.copyWith(
                       color: AppColors.primary,
                     ),
@@ -771,7 +823,10 @@ class _AddEmployeeScreenState extends State<AddEmployeeScreen> {
                       ),
                       if (_selectedJoiningDate != null)
                         IconButton(
-                          icon: Icon(Icons.clear, color: AppColors.textSecondary),
+                          icon: Icon(
+                            Icons.clear,
+                            color: AppColors.textSecondary,
+                          ),
                           onPressed: () {
                             setState(() {
                               _selectedJoiningDate = null;
@@ -817,10 +872,7 @@ class _AddEmployeeScreenState extends State<AddEmployeeScreen> {
                   ),
                   child: Row(
                     children: [
-                      Icon(
-                        Icons.cake_outlined,
-                        color: AppColors.textSecondary,
-                      ),
+                      Icon(Icons.cake_outlined, color: AppColors.textSecondary),
                       const SizedBox(width: 12),
                       Expanded(
                         child: Text(
@@ -836,7 +888,10 @@ class _AddEmployeeScreenState extends State<AddEmployeeScreen> {
                       ),
                       if (_selectedDateOfBirth != null)
                         IconButton(
-                          icon: Icon(Icons.clear, color: AppColors.textSecondary),
+                          icon: Icon(
+                            Icons.clear,
+                            color: AppColors.textSecondary,
+                          ),
                           onPressed: () {
                             setState(() {
                               _selectedDateOfBirth = null;
@@ -868,6 +923,85 @@ class _AddEmployeeScreenState extends State<AddEmployeeScreen> {
               ),
               const SizedBox(height: 24),
 
+              // Company Name Field
+              Text('Company Name', style: AppTextStyles.labelLarge),
+              const SizedBox(height: 8),
+              DropdownButtonFormField<String>(
+                value: _selectedCompany,
+                isExpanded: true, // Important: This fixes the overflow issue
+                decoration: InputDecoration(
+                  hintText: 'Select company',
+                  prefixIcon: Icon(
+                    Icons.business_center_outlined,
+                    color: AppColors.textSecondary,
+                  ),
+                  border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(12),
+                    borderSide: BorderSide(color: AppColors.borderLight),
+                  ),
+                  enabledBorder: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(12),
+                    borderSide: BorderSide(color: AppColors.borderLight),
+                  ),
+                  focusedBorder: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(12),
+                    borderSide: BorderSide(color: AppColors.primary, width: 2),
+                  ),
+                  filled: true,
+                  fillColor: AppColors.surface,
+                  contentPadding: const EdgeInsets.symmetric(
+                    horizontal: 16,
+                    vertical: 16,
+                  ),
+                ),
+                items: _companies.map((String company) {
+                  return DropdownMenuItem<String>(
+                    value: company,
+                    child: SizedBox(
+                      width: double.infinity,
+                      child: Text(
+                        company,
+                        style: AppTextStyles.bodyMedium,
+                        overflow: TextOverflow.ellipsis,
+                        maxLines: 2, // Allow 2 lines for long company names
+                      ),
+                    ),
+                  );
+                }).toList(),
+                onChanged: (String? value) {
+                  setState(() {
+                    _selectedCompany = value;
+                  });
+                },
+                validator: (value) {
+                  if (value == null || value.isEmpty) {
+                    return 'Please select a company';
+                  }
+                  return null;
+                },
+              ),
+              const SizedBox(height: 24),
+
+              // Salary Field
+              CustomTextField(
+                controller: _salaryController,
+                labelText: 'Monthly Salary (₹)',
+                hintText: 'Enter monthly salary amount',
+                prefixIcon: Icons.currency_rupee_outlined,
+                keyboardType: TextInputType.number,
+                validator: (value) {
+                  if (value == null || value.trim().isEmpty) {
+                    return 'Please enter salary amount';
+                  }
+                  final salary = double.tryParse(value.trim());
+                  if (salary == null || salary < 0) {
+                    return 'Please enter a valid salary amount';
+                  }
+                  return null;
+                },
+              ),
+              const SizedBox(height: 24),
+
               // Leave Balance Section
               Container(
                 width: double.infinity,
@@ -882,7 +1016,10 @@ class _AddEmployeeScreenState extends State<AddEmployeeScreen> {
                   children: [
                     Row(
                       children: [
-                        Icon(Icons.event_available_outlined, color: AppColors.primary),
+                        Icon(
+                          Icons.event_available_outlined,
+                          color: AppColors.primary,
+                        ),
                         const SizedBox(width: 8),
                         Text(
                           'Leave Balance',
@@ -893,7 +1030,7 @@ class _AddEmployeeScreenState extends State<AddEmployeeScreen> {
                       ],
                     ),
                     const SizedBox(height: 16),
-                    
+
                     Row(
                       children: [
                         Expanded(
@@ -936,7 +1073,7 @@ class _AddEmployeeScreenState extends State<AddEmployeeScreen> {
                       ],
                     ),
                     const SizedBox(height: 16),
-                    
+
                     Row(
                       children: [
                         Expanded(

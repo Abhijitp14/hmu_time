@@ -125,6 +125,8 @@ interface CreateEmployeeRequest {
   address?: string;
   employmentType?: string;
   workingHours?: number;
+  salary?: number;
+  companyName?: string;
   leaveBalance?: {
     sickLeave: number;
     casualLeave: number;
@@ -264,6 +266,8 @@ export const createEmployee = functions.https.onCall(
         address: data.address || null,
         employmentType: data.employmentType || null,
         workingHours: data.workingHours || null,
+        salary: data.salary || null,
+        companyName: data.companyName || null,
         leaveBalance: data.leaveBalance || {
           sickLeave: 6,
           casualLeave: 6,
@@ -629,6 +633,8 @@ export const updateEmployee = functions.https.onCall(
         address, 
         employmentType,
         workingHours,
+        salary,
+        companyName,
         leaveBalance 
       } = data;
 
@@ -652,6 +658,8 @@ export const updateEmployee = functions.https.onCall(
       if (address !== undefined) updateData.address = address;
       if (employmentType !== undefined) updateData.employmentType = employmentType;
       if (workingHours !== undefined) updateData.workingHours = workingHours;
+      if (salary !== undefined) updateData.salary = salary;
+      if (companyName !== undefined) updateData.companyName = companyName;
 
       // Handle date fields
       if (joiningDate) {

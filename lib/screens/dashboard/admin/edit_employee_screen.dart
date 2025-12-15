@@ -10,10 +10,8 @@ import '../../../services/employee_service.dart';
 class EditEmployeeScreen extends StatefulWidget {
   final AppUser employee;
 
-  const EditEmployeeScreen({
-    Key? key,
-    required this.employee,
-  }) : super(key: key);
+  const EditEmployeeScreen({Key? key, required this.employee})
+    : super(key: key);
 
   @override
   State<EditEmployeeScreen> createState() => _EditEmployeeScreenState();
@@ -33,12 +31,20 @@ class _EditEmployeeScreenState extends State<EditEmployeeScreen> {
   final _paidLeaveController = TextEditingController();
   final _optionalHolidayController = TextEditingController();
   final _workingHoursController = TextEditingController();
-  
+  final _salaryController = TextEditingController();
+
   bool _isLoading = false;
   String? _errorMessage;
   DateTime? _selectedJoiningDate;
   DateTime? _selectedDateOfBirth;
   TimeOfDay? _selectedWorkingHours;
+
+  // Company options
+  final List<String> _companies = [
+    'Urban Acres Infomediatech Pvt. Ltd',
+    'Media Guardians Pvt. Ltd.',
+    'Ecorenew Homes & Buildings Infomedia Pvt. Ltd.',
+  ];
 
   // Department options (you can customize these)
   final List<String> _departments = [
@@ -63,6 +69,7 @@ class _EditEmployeeScreenState extends State<EditEmployeeScreen> {
 
   String? _selectedDepartment;
   String? _selectedEmploymentType;
+  String? _selectedCompany;
 
   @override
   void initState() {
@@ -72,7 +79,7 @@ class _EditEmployeeScreenState extends State<EditEmployeeScreen> {
 
   void _initializeFromEmployee() {
     final employee = widget.employee;
-    
+
     // Initialize controllers with existing data
     _nameController.text = employee.name;
     _emailController.text = employee.email;
@@ -84,11 +91,11 @@ class _EditEmployeeScreenState extends State<EditEmployeeScreen> {
     _casualLeaveController.text = employee.casualLeave.toString();
     _paidLeaveController.text = employee.paidLeave.toString();
     _optionalHolidayController.text = employee.optionalHoliday.toString();
-    
+
     // Set dates
     _selectedJoiningDate = employee.joiningDate;
     _selectedDateOfBirth = employee.dateOfBirth;
-    
+
     // Set department
     if (_departments.contains(employee.department)) {
       _selectedDepartment = employee.department;
@@ -96,19 +103,30 @@ class _EditEmployeeScreenState extends State<EditEmployeeScreen> {
       _selectedDepartment = null;
       _departmentController.text = employee.department ?? '';
     }
-    
+
     // Set employment type
     _selectedEmploymentType = employee.employmentType;
-    
+
     // Set working hours
     if (employee.workingHours != null) {
       final hours = employee.workingHours!.floor();
       final minutes = ((employee.workingHours! - hours) * 60).round();
       _selectedWorkingHours = TimeOfDay(hour: hours, minute: minutes);
-      _workingHoursController.text = '${hours}:${minutes.toString().padLeft(2, '0')}';
+      _workingHoursController.text =
+          '${hours}:${minutes.toString().padLeft(2, '0')}';
     } else {
       _selectedWorkingHours = const TimeOfDay(hour: 8, minute: 0);
       _workingHoursController.text = '8:00';
+    }
+
+    // Set salary
+    _salaryController.text = employee.salary?.toString() ?? '';
+
+    // Set company
+    if (_companies.contains(employee.companyName)) {
+      _selectedCompany = employee.companyName;
+    } else {
+      _selectedCompany = null;
     }
   }
 
@@ -126,6 +144,7 @@ class _EditEmployeeScreenState extends State<EditEmployeeScreen> {
     _paidLeaveController.dispose();
     _optionalHolidayController.dispose();
     _workingHoursController.dispose();
+    _salaryController.dispose();
     super.dispose();
   }
 
@@ -144,7 +163,8 @@ class _EditEmployeeScreenState extends State<EditEmployeeScreen> {
     final department = _selectedDepartment ?? _departmentController.text.trim();
     if (department.isEmpty) {
       setState(() {
-        _errorMessage = 'Please select a department or enter a custom department';
+        _errorMessage =
+            'Please select a department or enter a custom department';
       });
       return;
     }
@@ -156,26 +176,35 @@ class _EditEmployeeScreenState extends State<EditEmployeeScreen> {
 
     try {
       final employeeService = EmployeeService();
-      
+
       final result = await employeeService.updateEmployee(
         uid: widget.employee.id,
         name: _nameController.text.trim(),
         email: _emailController.text.trim().toLowerCase(),
         empCode: _empCodeController.text.trim(),
         department: _selectedDepartment ?? _departmentController.text.trim(),
-        designation: _designationController.text.trim().isNotEmpty ? _designationController.text.trim() : null,
+        designation: _designationController.text.trim().isNotEmpty
+            ? _designationController.text.trim()
+            : null,
         joiningDate: _selectedJoiningDate,
-        phoneNumber: _phoneController.text.trim().isNotEmpty ? _phoneController.text.trim() : null,
+        phoneNumber: _phoneController.text.trim().isNotEmpty
+            ? _phoneController.text.trim()
+            : null,
         dateOfBirth: _selectedDateOfBirth,
-        address: _addressController.text.trim().isNotEmpty ? _addressController.text.trim() : null,
+        address: _addressController.text.trim().isNotEmpty
+            ? _addressController.text.trim()
+            : null,
         sickLeave: int.tryParse(_sickLeaveController.text) ?? 6,
         casualLeave: int.tryParse(_casualLeaveController.text) ?? 6,
         paidLeave: int.tryParse(_paidLeaveController.text) ?? 6,
         optionalHoliday: int.tryParse(_optionalHolidayController.text) ?? 3,
         employmentType: _selectedEmploymentType,
-        workingHours: _selectedWorkingHours != null 
-            ? _selectedWorkingHours!.hour + (_selectedWorkingHours!.minute / 60.0)
+        workingHours: _selectedWorkingHours != null
+            ? _selectedWorkingHours!.hour +
+                  (_selectedWorkingHours!.minute / 60.0)
             : null,
+        salary: double.tryParse(_salaryController.text),
+        companyName: _selectedCompany,
       );
 
       if (!mounted) return;
@@ -187,31 +216,46 @@ class _EditEmployeeScreenState extends State<EditEmployeeScreen> {
           email: _emailController.text.trim().toLowerCase(),
           empCode: _empCodeController.text.trim(),
           department: _selectedDepartment ?? _departmentController.text.trim(),
-          designation: _designationController.text.trim().isNotEmpty ? _designationController.text.trim() : null,
+          designation: _designationController.text.trim().isNotEmpty
+              ? _designationController.text.trim()
+              : null,
           joiningDate: _selectedJoiningDate,
-          phoneNumber: _phoneController.text.trim().isNotEmpty ? _phoneController.text.trim() : null,
+          phoneNumber: _phoneController.text.trim().isNotEmpty
+              ? _phoneController.text.trim()
+              : null,
           dateOfBirth: _selectedDateOfBirth,
-          address: _addressController.text.trim().isNotEmpty ? _addressController.text.trim() : null,
+          address: _addressController.text.trim().isNotEmpty
+              ? _addressController.text.trim()
+              : null,
           leaveBalance: {
             'sickLeave': int.tryParse(_sickLeaveController.text) ?? 6,
             'casualLeave': int.tryParse(_casualLeaveController.text) ?? 6,
             'paidLeave': int.tryParse(_paidLeaveController.text) ?? 6,
-            'optionalHoliday': int.tryParse(_optionalHolidayController.text) ?? 3,
+            'optionalHoliday':
+                int.tryParse(_optionalHolidayController.text) ?? 3,
           },
           employmentType: _selectedEmploymentType,
-          workingHours: _selectedWorkingHours != null 
-              ? _selectedWorkingHours!.hour + (_selectedWorkingHours!.minute / 60.0)
+          workingHours: _selectedWorkingHours != null
+              ? _selectedWorkingHours!.hour +
+                    (_selectedWorkingHours!.minute / 60.0)
               : null,
+          salary: double.tryParse(_salaryController.text),
+          companyName: _selectedCompany,
         );
 
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text('Employee ${_nameController.text} updated successfully!'),
+            content: Text(
+              'Employee ${_nameController.text} updated successfully!',
+            ),
             backgroundColor: Colors.green,
             duration: const Duration(seconds: 3),
           ),
         );
-        Navigator.pop(context, updatedEmployee); // Return the updated employee object
+        Navigator.pop(
+          context,
+          updatedEmployee,
+        ); // Return the updated employee object
       } else {
         setState(() {
           _errorMessage = result.error ?? 'Failed to update employee';
@@ -236,7 +280,9 @@ class _EditEmployeeScreenState extends State<EditEmployeeScreen> {
       context: context,
       initialDate: _selectedJoiningDate ?? DateTime.now(),
       firstDate: DateTime(2000),
-      lastDate: DateTime.now().add(const Duration(days: 365)), // Allow future dates up to 1 year
+      lastDate: DateTime.now().add(
+        const Duration(days: 365),
+      ), // Allow future dates up to 1 year
       builder: (context, child) {
         return Theme(
           data: Theme.of(context).copyWith(
@@ -335,7 +381,9 @@ class _EditEmployeeScreenState extends State<EditEmployeeScreen> {
               Navigator.pop(context);
               final TimeOfDay? picked = await showTimePicker(
                 context: context,
-                initialTime: _selectedWorkingHours ?? const TimeOfDay(hour: 8, minute: 0),
+                initialTime:
+                    _selectedWorkingHours ??
+                    const TimeOfDay(hour: 8, minute: 0),
                 helpText: 'Select Working Hours',
                 builder: (context, child) {
                   return Theme(
@@ -348,9 +396,9 @@ class _EditEmployeeScreenState extends State<EditEmployeeScreen> {
                       ),
                     ),
                     child: MediaQuery(
-                      data: MediaQuery.of(context).copyWith(
-                        alwaysUse24HourFormat: true,
-                      ),
+                      data: MediaQuery.of(
+                        context,
+                      ).copyWith(alwaysUse24HourFormat: true),
                       child: child!,
                     ),
                   );
@@ -360,7 +408,8 @@ class _EditEmployeeScreenState extends State<EditEmployeeScreen> {
               if (picked != null && picked != _selectedWorkingHours) {
                 setState(() {
                   _selectedWorkingHours = picked;
-                  _workingHoursController.text = '${picked.hour}:${picked.minute.toString().padLeft(2, '0')}';
+                  _workingHoursController.text =
+                      '${picked.hour}:${picked.minute.toString().padLeft(2, '0')}';
                 });
               }
             },
@@ -388,10 +437,6 @@ class _EditEmployeeScreenState extends State<EditEmployeeScreen> {
     });
   }
 
-
-
-
-
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -411,10 +456,7 @@ class _EditEmployeeScreenState extends State<EditEmployeeScreen> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Text(
-                'Edit Employee Details',
-                style: AppTextStyles.h2,
-              ),
+              Text('Edit Employee Details', style: AppTextStyles.h2),
               const SizedBox(height: 8),
               Text(
                 'Update employee information and settings',
@@ -502,7 +544,10 @@ class _EditEmployeeScreenState extends State<EditEmployeeScreen> {
                 value: _selectedDepartment,
                 decoration: InputDecoration(
                   hintText: 'Select department',
-                  prefixIcon: Icon(Icons.business_outlined, color: AppColors.textSecondary),
+                  prefixIcon: Icon(
+                    Icons.business_outlined,
+                    color: AppColors.textSecondary,
+                  ),
                   border: OutlineInputBorder(
                     borderRadius: BorderRadius.circular(12),
                     borderSide: BorderSide(color: AppColors.borderLight),
@@ -560,7 +605,10 @@ class _EditEmployeeScreenState extends State<EditEmployeeScreen> {
                 value: _selectedEmploymentType,
                 decoration: InputDecoration(
                   hintText: 'Select employment type',
-                  prefixIcon: Icon(Icons.work_history_outlined, color: AppColors.textSecondary),
+                  prefixIcon: Icon(
+                    Icons.work_history_outlined,
+                    color: AppColors.textSecondary,
+                  ),
                   border: OutlineInputBorder(
                     borderRadius: BorderRadius.circular(12),
                     borderSide: BorderSide(color: AppColors.borderLight),
@@ -602,7 +650,9 @@ class _EditEmployeeScreenState extends State<EditEmployeeScreen> {
                   padding: const EdgeInsets.all(16),
                   decoration: BoxDecoration(
                     border: Border.all(
-                      color: _selectedWorkingHours == null && _errorMessage?.contains('working hours') == true
+                      color:
+                          _selectedWorkingHours == null &&
+                              _errorMessage?.contains('working hours') == true
                           ? Colors.red.shade300
                           : AppColors.borderLight,
                     ),
@@ -646,7 +696,11 @@ class _EditEmployeeScreenState extends State<EditEmployeeScreen> {
                     borderRadius: BorderRadius.circular(6),
                   ),
                   child: Text(
-                    'Default for $_selectedEmploymentType: ${_selectedEmploymentType == 'Full Time' ? '8:00' : _selectedEmploymentType == 'Part Time' ? '5:00' : '2:30'} hours',
+                    'Default for $_selectedEmploymentType: ${_selectedEmploymentType == 'Full Time'
+                        ? '8:00'
+                        : _selectedEmploymentType == 'Part Time'
+                        ? '5:00'
+                        : '2:30'} hours',
                     style: AppTextStyles.bodySmall.copyWith(
                       color: AppColors.primary,
                     ),
@@ -689,7 +743,10 @@ class _EditEmployeeScreenState extends State<EditEmployeeScreen> {
                       ),
                       if (_selectedJoiningDate != null)
                         IconButton(
-                          icon: Icon(Icons.clear, color: AppColors.textSecondary),
+                          icon: Icon(
+                            Icons.clear,
+                            color: AppColors.textSecondary,
+                          ),
                           onPressed: () {
                             setState(() {
                               _selectedJoiningDate = null;
@@ -735,10 +792,7 @@ class _EditEmployeeScreenState extends State<EditEmployeeScreen> {
                   ),
                   child: Row(
                     children: [
-                      Icon(
-                        Icons.cake_outlined,
-                        color: AppColors.textSecondary,
-                      ),
+                      Icon(Icons.cake_outlined, color: AppColors.textSecondary),
                       const SizedBox(width: 12),
                       Expanded(
                         child: Text(
@@ -754,7 +808,10 @@ class _EditEmployeeScreenState extends State<EditEmployeeScreen> {
                       ),
                       if (_selectedDateOfBirth != null)
                         IconButton(
-                          icon: Icon(Icons.clear, color: AppColors.textSecondary),
+                          icon: Icon(
+                            Icons.clear,
+                            color: AppColors.textSecondary,
+                          ),
                           onPressed: () {
                             setState(() {
                               _selectedDateOfBirth = null;
@@ -786,6 +843,81 @@ class _EditEmployeeScreenState extends State<EditEmployeeScreen> {
               ),
               const SizedBox(height: 24),
 
+              // Company Name Field
+              Text('Company Name', style: AppTextStyles.labelLarge),
+              const SizedBox(height: 8),
+              DropdownButtonFormField<String>(
+                value: _selectedCompany,
+                isExpanded: true, // Important: This fixes the overflow issue
+                decoration: InputDecoration(
+                  hintText: 'Select company',
+                  prefixIcon: Icon(
+                    Icons.business_outlined,
+                    color: AppColors.textSecondary,
+                  ),
+                  border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(12),
+                    borderSide: BorderSide(color: AppColors.borderLight),
+                  ),
+                  enabledBorder: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(12),
+                    borderSide: BorderSide(color: AppColors.borderLight),
+                  ),
+                  focusedBorder: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(12),
+                    borderSide: BorderSide(color: AppColors.primary, width: 2),
+                  ),
+                  filled: true,
+                  fillColor: AppColors.surface,
+                  contentPadding: const EdgeInsets.symmetric(
+                    horizontal: 16,
+                    vertical: 16,
+                  ),
+                ),
+                items: _companies.map((String company) {
+                  return DropdownMenuItem<String>(
+                    value: company,
+                    child: SizedBox(
+                      width: double.infinity,
+                      child: Text(
+                        company,
+                        style: AppTextStyles.bodyMedium,
+                        overflow: TextOverflow.ellipsis,
+                        maxLines: 2, // Allow 2 lines for long company names
+                      ),
+                    ),
+                  );
+                }).toList(),
+                onChanged: (String? value) {
+                  setState(() {
+                    _selectedCompany = value;
+                  });
+                },
+                validator: (value) {
+                  return null;
+                },
+              ),
+              const SizedBox(height: 24),
+
+              // Salary Field
+              CustomTextField(
+                controller: _salaryController,
+                labelText: 'Monthly Salary (₹)',
+                hintText: 'Enter monthly salary amount',
+                prefixIcon: Icons.currency_rupee_outlined,
+                keyboardType: TextInputType.number,
+                validator: (value) {
+                  if (value != null && value.trim().isNotEmpty) {
+                    final salary = double.tryParse(value.trim());
+                    if (salary == null || salary < 0) {
+                      return 'Please enter a valid salary amount';
+                    }
+                  }
+                  return null;
+                },
+              ),
+              const SizedBox(height: 24),
+
               // Leave Balance Section
               Container(
                 width: double.infinity,
@@ -800,7 +932,10 @@ class _EditEmployeeScreenState extends State<EditEmployeeScreen> {
                   children: [
                     Row(
                       children: [
-                        Icon(Icons.event_available_outlined, color: AppColors.primary),
+                        Icon(
+                          Icons.event_available_outlined,
+                          color: AppColors.primary,
+                        ),
                         const SizedBox(width: 8),
                         Text(
                           'Leave Balance',
@@ -811,7 +946,7 @@ class _EditEmployeeScreenState extends State<EditEmployeeScreen> {
                       ],
                     ),
                     const SizedBox(height: 16),
-                    
+
                     Row(
                       children: [
                         Expanded(
@@ -854,7 +989,7 @@ class _EditEmployeeScreenState extends State<EditEmployeeScreen> {
                       ],
                     ),
                     const SizedBox(height: 16),
-                    
+
                     Row(
                       children: [
                         Expanded(

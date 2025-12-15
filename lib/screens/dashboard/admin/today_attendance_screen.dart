@@ -23,16 +23,16 @@ class _TodayAttendanceScreenState extends State<TodayAttendanceScreen> {
   String _filterStatus = 'All'; // All, Present, Absent, Half Day, Late
 
   Timer? _refreshTimer;
-  bool _autoRefreshEnabled = true;
-  DateTime? _lastRefreshTime;
-  int _refreshCountdown = 60; // Reduced to 1 minute for real-time updates
+  // bool _autoRefreshEnabled = true;
+  // DateTime? _lastRefreshTime;
+  // int _refreshCountdown = 60; // Reduced to 1 minute for real-time updates
   bool _isBackgroundRefreshing = false;
 
   @override
   void initState() {
     super.initState();
     _loadTodayAttendance();
-    _startPeriodicRefresh();
+    // _startPeriodicRefresh();
   }
 
   @override
@@ -41,107 +41,107 @@ class _TodayAttendanceScreenState extends State<TodayAttendanceScreen> {
     super.dispose();
   }
 
-  void _startPeriodicRefresh() {
-    // Refresh every 1 minute (60 seconds) to get real-time check-out updates
-    _refreshCountdown = 60;
-    _refreshTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
-      if (_autoRefreshEnabled && mounted) {
-        setState(() {
-          _refreshCountdown--;
-        });
+  // void _startPeriodicRefresh() {
+  //   // Refresh every 1 minute (60 seconds) to get real-time check-out updates
+  //   _refreshCountdown = 60;
+  //   _refreshTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
+  //     if (_autoRefreshEnabled && mounted) {
+  //       setState(() {
+  //         _refreshCountdown--;
+  //       });
 
-        if (_refreshCountdown <= 0 && !_isLoading && !_isBackgroundRefreshing) {
-          _refreshDataQuietly();
-          _refreshCountdown = 60; // Reset countdown to 1 minute
-        }
-      }
-    });
-  }
+  //       if (_refreshCountdown <= 0 && !_isLoading && !_isBackgroundRefreshing) {
+  //         _refreshDataQuietly();
+  //         _refreshCountdown = 60; // Reset countdown to 1 minute
+  //       }
+  //     }
+  //   });
+  // }
 
-  void _toggleAutoRefresh() {
-    setState(() {
-      _autoRefreshEnabled = !_autoRefreshEnabled;
-    });
+  // void _toggleAutoRefresh() {
+  //   setState(() {
+  //     _autoRefreshEnabled = !_autoRefreshEnabled;
+  //   });
 
-    if (_autoRefreshEnabled) {
-      _startPeriodicRefresh();
-    } else {
-      _refreshTimer?.cancel();
-      _refreshCountdown = 60; // Reset countdown when disabled
-    }
-  }
+  //   if (_autoRefreshEnabled) {
+  //     _startPeriodicRefresh();
+  //   } else {
+  //     _refreshTimer?.cancel();
+  //     _refreshCountdown = 60; // Reset countdown when disabled
+  //   }
+  // }
 
-  Future<void> _refreshDataQuietly() async {
-    if (_isBackgroundRefreshing) return; // Prevent overlapping refreshes
+  // Future<void> _refreshDataQuietly() async {
+  //   if (_isBackgroundRefreshing) return; // Prevent overlapping refreshes
 
-    setState(() => _isBackgroundRefreshing = true);
+  //   setState(() => _isBackgroundRefreshing = true);
 
-    try {
-      // Background refresh WITH sync to get real-time data
-      print('🔄 Background refresh: Syncing real-time attendance data...');
-      final records = await _attendanceService.getTodayAttendance(
-        autoSync: true,
-      );
-      final summary = _attendanceService.calculateSummary(records);
+  //   try {
+  //     // Background refresh WITH sync to get real-time data
+  //     print('🔄 Background refresh: Syncing real-time attendance data...');
+  //     final records = await _attendanceService.getTodayAttendance(
+  //       autoSync: true,
+  //     );
+  //     final summary = _attendanceService.calculateSummary(records);
 
-      if (mounted) {
-        setState(() {
-          _attendanceRecords = records;
-          _summary = summary;
-          _lastRefreshTime = DateTime.now();
-        });
-        print(
-          '✅ Background refresh completed: ${records.length} records updated',
-        );
+  //     if (mounted) {
+  //       setState(() {
+  //         _attendanceRecords = records;
+  //         _summary = summary;
+  //         _lastRefreshTime = DateTime.now();
+  //       });
+  //       print(
+  //         '✅ Background refresh completed: ${records.length} records updated',
+  //       );
 
-        // Show subtle success indicator
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: const Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Icon(Icons.check_circle, color: Colors.white, size: 16),
-                SizedBox(width: 8),
-                Text('Attendance data updated'),
-              ],
-            ),
-            backgroundColor: Colors.green,
-            duration: const Duration(seconds: 2),
-            behavior: SnackBarBehavior.floating,
-            margin: const EdgeInsets.only(bottom: 80, left: 16, right: 16),
-          ),
-        );
-      }
-    } catch (e) {
-      // Log error but don't show UI notifications for background refresh
-      print('❌ Background refresh failed: $e');
+  //       // Show subtle success indicator
+  //       ScaffoldMessenger.of(context).showSnackBar(
+  //         SnackBar(
+  //           content: const Row(
+  //             mainAxisSize: MainAxisSize.min,
+  //             children: [
+  //               Icon(Icons.check_circle, color: Colors.white, size: 16),
+  //               SizedBox(width: 8),
+  //               Text('Attendance data updated'),
+  //             ],
+  //           ),
+  //           backgroundColor: Colors.green,
+  //           duration: const Duration(seconds: 2),
+  //           behavior: SnackBarBehavior.floating,
+  //           margin: const EdgeInsets.only(bottom: 80, left: 16, right: 16),
+  //         ),
+  //       );
+  //     }
+  //   } catch (e) {
+  //     // Log error but don't show UI notifications for background refresh
+  //     print('❌ Background refresh failed: $e');
 
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                const Icon(Icons.warning, color: Colors.white, size: 16),
-                const SizedBox(width: 8),
-                Text(
-                  'Auto-refresh failed: ${e.toString().length > 30 ? e.toString().substring(0, 30) + '...' : e}',
-                ),
-              ],
-            ),
-            backgroundColor: Colors.orange,
-            duration: const Duration(seconds: 2),
-            behavior: SnackBarBehavior.floating,
-            margin: const EdgeInsets.only(bottom: 80, left: 16, right: 16),
-          ),
-        );
-      }
-    } finally {
-      if (mounted) {
-        setState(() => _isBackgroundRefreshing = false);
-      }
-    }
-  }
+  //     if (mounted) {
+  //       ScaffoldMessenger.of(context).showSnackBar(
+  //         SnackBar(
+  //           content: Row(
+  //             mainAxisSize: MainAxisSize.min,
+  //             children: [
+  //               const Icon(Icons.warning, color: Colors.white, size: 16),
+  //               const SizedBox(width: 8),
+  //               Text(
+  //                 'Auto-refresh failed: ${e.toString().length > 30 ? e.toString().substring(0, 30) + '...' : e}',
+  //               ),
+  //             ],
+  //           ),
+  //           backgroundColor: Colors.orange,
+  //           duration: const Duration(seconds: 2),
+  //           behavior: SnackBarBehavior.floating,
+  //           margin: const EdgeInsets.only(bottom: 80, left: 16, right: 16),
+  //         ),
+  //       );
+  //     }
+  //   } finally {
+  //     if (mounted) {
+  //       setState(() => _isBackgroundRefreshing = false);
+  //     }
+  //   }
+  // }
 
   Future<void> _loadTodayAttendance({bool? quickLoad}) async {
     final bool shouldAutoSync = quickLoad == null ? true : !quickLoad;
@@ -191,7 +191,7 @@ class _TodayAttendanceScreenState extends State<TodayAttendanceScreen> {
           _isLoading = false;
           _isSyncing = false;
           _syncStatus = '';
-          _lastRefreshTime = DateTime.now();
+          //_lastRefreshTime = DateTime.now();
         });
 
         // Show success message with appropriate text
@@ -268,30 +268,30 @@ class _TodayAttendanceScreenState extends State<TodayAttendanceScreen> {
               'Today\'s Attendance - ${DateFormat('MMM dd, yyyy').format(DateTime.now())}',
               style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 16),
             ),
-            if (_lastRefreshTime != null)
-              Text(
-                'Last updated: ${DateFormat('HH:mm:ss').format(_lastRefreshTime!)}',
-                style: const TextStyle(
-                  fontSize: 12,
-                  fontWeight: FontWeight.w400,
-                ),
-              ),
+            // if (_lastRefreshTime != null)
+            //   Text(
+            //     'Last updated: ${DateFormat('HH:mm:ss').format(_lastRefreshTime!)}',
+            //     style: const TextStyle(
+            //       fontSize: 12,
+            //       fontWeight: FontWeight.w400,
+            //     ),
+            //   ),
           ],
         ),
         backgroundColor: AppColors.primary,
         foregroundColor: Colors.white,
         actions: [
           // Auto-refresh toggle
-          IconButton(
-            icon: Icon(
-              _autoRefreshEnabled ? Icons.sync : Icons.sync_disabled,
-              color: _autoRefreshEnabled ? Colors.white : Colors.white70,
-            ),
-            tooltip: _autoRefreshEnabled
-                ? 'Auto-refresh ON (1min)'
-                : 'Auto-refresh OFF',
-            onPressed: _toggleAutoRefresh,
-          ),
+          // IconButton(
+          //   icon: Icon(
+          //     _autoRefreshEnabled ? Icons.sync : Icons.sync_disabled,
+          //     color: _autoRefreshEnabled ? Colors.white : Colors.white70,
+          //   ),
+          //   tooltip: _autoRefreshEnabled
+          //       ? 'Auto-refresh ON (1min)'
+          //       : 'Auto-refresh OFF',
+          //   onPressed: _toggleAutoRefresh,
+          // ),
           PopupMenuButton<String>(
             onSelected: (value) {
               switch (value) {
@@ -391,60 +391,60 @@ class _TodayAttendanceScreenState extends State<TodayAttendanceScreen> {
                 style: TextStyle(fontSize: 18, fontWeight: FontWeight.w600),
               ),
               const Spacer(),
-              if (_autoRefreshEnabled && _lastRefreshTime != null)
-                Column(
-                  crossAxisAlignment: CrossAxisAlignment.end,
-                  children: [
-                    Row(
-                      children: [
-                        if (_isBackgroundRefreshing) ...[
-                          SizedBox(
-                            width: 12,
-                            height: 12,
-                            child: CircularProgressIndicator(
-                              strokeWidth: 2,
-                              valueColor: AlwaysStoppedAnimation<Color>(
-                                Colors.green.shade600,
-                              ),
-                            ),
-                          ),
-                          const SizedBox(width: 4),
-                          Text(
-                            'Updating...',
-                            style: TextStyle(
-                              fontSize: 12,
-                              color: Colors.green.shade600,
-                              fontWeight: FontWeight.w500,
-                            ),
-                          ),
-                        ] else ...[
-                          Icon(
-                            Icons.sync,
-                            size: 14,
-                            color: Colors.green.shade600,
-                          ),
-                          const SizedBox(width: 4),
-                          Text(
-                            'Auto-refresh',
-                            style: TextStyle(
-                              fontSize: 12,
-                              color: Colors.green.shade600,
-                              fontWeight: FontWeight.w500,
-                            ),
-                          ),
-                        ],
-                      ],
-                    ),
-                    if (!_isBackgroundRefreshing)
-                      Text(
-                        'Next in ${_refreshCountdown}s',
-                        style: TextStyle(
-                          fontSize: 10,
-                          color: Colors.grey.shade600,
-                        ),
-                      ),
-                  ],
-                ),
+              // if (_autoRefreshEnabled && _lastRefreshTime != null)
+              //   Column(
+              //     crossAxisAlignment: CrossAxisAlignment.end,
+              //     children: [
+              //       Row(
+              //         children: [
+              //           if (_isBackgroundRefreshing) ...[
+              //             SizedBox(
+              //               width: 12,
+              //               height: 12,
+              //               child: CircularProgressIndicator(
+              //                 strokeWidth: 2,
+              //                 valueColor: AlwaysStoppedAnimation<Color>(
+              //                   Colors.green.shade600,
+              //                 ),
+              //               ),
+              //             ),
+              //             const SizedBox(width: 4),
+              //             Text(
+              //               'Updating...',
+              //               style: TextStyle(
+              //                 fontSize: 12,
+              //                 color: Colors.green.shade600,
+              //                 fontWeight: FontWeight.w500,
+              //               ),
+              //             ),
+              //           ] else ...[
+              //             Icon(
+              //               Icons.sync,
+              //               size: 14,
+              //               color: Colors.green.shade600,
+              //             ),
+              //             const SizedBox(width: 4),
+              //             Text(
+              //               'Auto-refresh',
+              //               style: TextStyle(
+              //                 fontSize: 12,
+              //                 color: Colors.green.shade600,
+              //                 fontWeight: FontWeight.w500,
+              //               ),
+              //             ),
+              //           ],
+              //         ],
+              //       ),
+              //       if (!_isBackgroundRefreshing)
+              //         Text(
+              //           'Next in ${_refreshCountdown}s',
+              //           style: TextStyle(
+              //             fontSize: 10,
+              //             color: Colors.grey.shade600,
+              //           ),
+              //         ),
+              //     ],
+              //   ),
             ],
           ),
           const SizedBox(height: 12),

@@ -1,13 +1,6 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 
-enum UserRole {
-  admin,
-  hr,
-  manager,
-  employee,
-}
-
-
+enum UserRole { admin, hr, manager, employee }
 
 extension UserRoleExtension on UserRole {
   String get displayName {
@@ -52,8 +45,6 @@ extension UserRoleExtension on UserRole {
   }
 }
 
-
-
 class AppUser {
   final String id;
   final String email;
@@ -71,8 +62,10 @@ class AppUser {
   final String? address;
   final String? employmentType; // Full Time, Part Time, Consultant
   final double? workingHours; // Working hours per day
+  final double? salary; // Monthly salary
+  final String? companyName; // Company name
   final Map<String, int> leaveBalance;
-  final String? fcmToken;  // Add this field
+  final String? fcmToken; // Add this field
 
   AppUser({
     required this.id,
@@ -91,14 +84,18 @@ class AppUser {
     this.address,
     this.employmentType,
     this.workingHours,
+    this.salary,
+    this.companyName,
     Map<String, int>? leaveBalance,
-    this.fcmToken,  // Add this parameter
-  }) : leaveBalance = leaveBalance ?? {
-    'sickLeave': 6,
-    'casualLeave': 6,
-    'paidLeave': 6,
-    'optionalHoliday': 3,
-  };
+    this.fcmToken, // Add this parameter
+  }) : leaveBalance =
+           leaveBalance ??
+           {
+             'sickLeave': 6,
+             'casualLeave': 6,
+             'paidLeave': 6,
+             'optionalHoliday': 3,
+           };
 
   Map<String, dynamic> toJson() {
     return {
@@ -112,14 +109,20 @@ class AppUser {
       'isActive': isActive,
       'department': department,
       'empCode': empCode,
-      'joiningDate': joiningDate != null ? Timestamp.fromDate(joiningDate!) : null,
+      'joiningDate': joiningDate != null
+          ? Timestamp.fromDate(joiningDate!)
+          : null,
       'phoneNumber': phoneNumber,
-      'dateOfBirth': dateOfBirth != null ? Timestamp.fromDate(dateOfBirth!) : null,
+      'dateOfBirth': dateOfBirth != null
+          ? Timestamp.fromDate(dateOfBirth!)
+          : null,
       'address': address,
       'employmentType': employmentType,
       'workingHours': workingHours,
+      'salary': salary,
+      'companyName': companyName,
       'leaveBalance': leaveBalance,
-      'fcmToken': fcmToken,  // Add this line
+      'fcmToken': fcmToken, // Add this line
     };
   }
 
@@ -142,13 +145,15 @@ class AppUser {
       'address': address,
       'employmentType': employmentType,
       'workingHours': workingHours,
+      'salary': salary,
+      'companyName': companyName,
       'leaveBalance': leaveBalance,
     };
   }
 
   factory AppUser.fromJson(Map<String, dynamic> json) {
     DateTime parsedCreatedAt;
-    
+
     // Handle both Timestamp and String formats
     if (json['createdAt'] != null) {
       if (json['createdAt'] is String) {
@@ -185,7 +190,7 @@ class AppUser {
         parsedDateOfBirth = (json['dateOfBirth'] as Timestamp).toDate();
       }
     }
-    
+
     return AppUser(
       id: json['id'] ?? '',
       email: json['email'] ?? '',
@@ -203,20 +208,28 @@ class AppUser {
       address: json['address'],
       employmentType: json['employmentType'],
       workingHours: json['workingHours']?.toDouble(),
-      leaveBalance: json['leaveBalance'] != null 
-        ? Map<String, int>.from(
-            (json['leaveBalance'] as Map<String, dynamic>).map(
-              (key, value) => MapEntry(key, (value is double) ? value.round() : value as int)
+      salary: json['salary']?.toDouble(),
+      companyName: json['companyName'],
+      leaveBalance: json['leaveBalance'] != null
+          ? Map<String, int>.from(
+              (json['leaveBalance'] as Map<String, dynamic>).map(
+                (key, value) => MapEntry(
+                  key,
+                  (value is double) ? value.round() : value as int,
+                ),
+              ),
             )
-          )
-        : {
-            'sickLeave': json['sickLeave'] ?? 6,
-            'casualLeave': json['casualLeave'] ?? 6,
-            'paidLeave': json['paidLeave'] ?? 6, // Handle legacy data
-            'optionalHoliday': json['optionalHoliday'] ?? json['optionalLeave'] ?? 3, // Handle legacy data
-            'lwp': 0, // LWP has no balance limit
-          },
-      fcmToken: json['fcmToken'],  // Add this line
+          : {
+              'sickLeave': json['sickLeave'] ?? 6,
+              'casualLeave': json['casualLeave'] ?? 6,
+              'paidLeave': json['paidLeave'] ?? 6, // Handle legacy data
+              'optionalHoliday':
+                  json['optionalHoliday'] ??
+                  json['optionalLeave'] ??
+                  3, // Handle legacy data
+              'lwp': 0, // LWP has no balance limit
+            },
+      fcmToken: json['fcmToken'], // Add this line
     );
   }
 
@@ -237,8 +250,10 @@ class AppUser {
     String? address,
     String? employmentType,
     double? workingHours,
+    double? salary,
+    String? companyName,
     Map<String, int>? leaveBalance,
-    String? fcmToken,  // Add this parameter
+    String? fcmToken, // Add this parameter
   }) {
     return AppUser(
       id: id ?? this.id,
@@ -257,8 +272,10 @@ class AppUser {
       address: address ?? this.address,
       employmentType: employmentType ?? this.employmentType,
       workingHours: workingHours ?? this.workingHours,
+      salary: salary ?? this.salary,
+      companyName: companyName ?? this.companyName,
       leaveBalance: leaveBalance ?? this.leaveBalance,
-      fcmToken: fcmToken ?? this.fcmToken,  // Add this line
+      fcmToken: fcmToken ?? this.fcmToken, // Add this line
     );
   }
 
@@ -267,26 +284,26 @@ class AppUser {
   bool get isAdmin => role == UserRole.admin;
   bool get isHR => role == UserRole.hr;
   bool get isManager => role == UserRole.manager;
-  
+
   // Employee type helpers based on existing employmentType field
   bool get isPartTimeEmployee {
     return employmentType?.toLowerCase().contains('part') == true;
   }
-  
+
   bool get isFullTimeEmployee {
     return employmentType?.toLowerCase().contains('full') == true;
   }
-  
+
   bool get isConsultantEmployee {
     return employmentType?.toLowerCase().contains('consultant') == true;
   }
-  
+
   bool get canManageEmployees => isAdmin || isHR;
   bool get canApproveLeave => isAdmin || isHR || isManager;
   bool get hasEmpCode => empCode != null && empCode!.isNotEmpty;
   bool get hasDepartment => department != null && department!.isNotEmpty;
   bool get hasJoiningDate => joiningDate != null;
-  
+
   String get displayRole => role.displayName;
   String get displayName => name;
   String get displayEmpCode => empCode ?? 'N/A';
@@ -295,26 +312,50 @@ class AppUser {
     if (joiningDate == null) return 'Not specified';
     return '${joiningDate!.day}/${joiningDate!.month}/${joiningDate!.year}';
   }
-  
+
   String get displayJoiningDateFormatted {
     if (joiningDate == null) return 'Not specified';
-    final months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
-                   'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+    final months = [
+      'Jan',
+      'Feb',
+      'Mar',
+      'Apr',
+      'May',
+      'Jun',
+      'Jul',
+      'Aug',
+      'Sep',
+      'Oct',
+      'Nov',
+      'Dec',
+    ];
     return '${joiningDate!.day} ${months[joiningDate!.month - 1]} ${joiningDate!.year}';
   }
-  
+
   String get displayDateOfBirth {
     if (dateOfBirth == null) return 'Not specified';
     return '${dateOfBirth!.day}/${dateOfBirth!.month}/${dateOfBirth!.year}';
   }
-  
+
   String get displayDateOfBirthFormatted {
     if (dateOfBirth == null) return 'Not specified';
-    final months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
-                   'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+    final months = [
+      'Jan',
+      'Feb',
+      'Mar',
+      'Apr',
+      'May',
+      'Jun',
+      'Jul',
+      'Aug',
+      'Sep',
+      'Oct',
+      'Nov',
+      'Dec',
+    ];
     return '${dateOfBirth!.day} ${months[dateOfBirth!.month - 1]} ${dateOfBirth!.year}';
   }
-  
+
   String get displayPhoneNumber => phoneNumber ?? 'Not provided';
   String get displayAddress => address ?? 'Not provided';
   String get displayEmploymentType => employmentType ?? 'Not specified';
@@ -328,39 +369,51 @@ class AppUser {
       return '$hours:${minutes.toString().padLeft(2, '0')} hours/day';
     }
   }
-  
+
+  String get displaySalary {
+    if (salary == null) return 'Not specified';
+    return '₹${salary!.toStringAsFixed(0)}/month';
+  }
+
+  String get displayCompanyName => companyName ?? 'Not specified';
+
   // Calculate age from date of birth
   int? get age {
     if (dateOfBirth == null) return null;
     final now = DateTime.now();
     int age = now.year - dateOfBirth!.year;
-    if (now.month < dateOfBirth!.month || 
+    if (now.month < dateOfBirth!.month ||
         (now.month == dateOfBirth!.month && now.day < dateOfBirth!.day)) {
       age--;
     }
     return age;
   }
-  
+
   String get displayAge {
     final ageValue = age;
     return ageValue != null ? '$ageValue years' : 'N/A';
   }
-  
+
   // Leave balance getters
   int get sickLeave => leaveBalance['sickLeave'] ?? 6;
   int get casualLeave => leaveBalance['casualLeave'] ?? 6;
-  int get paidLeave => leaveBalance['paidLeave']  ?? 6; // Handle legacy data
-  int get optionalHoliday => leaveBalance['optionalHoliday'] ?? leaveBalance['optionalLeave'] ?? 3; // Handle legacy data
-  
+  int get paidLeave => leaveBalance['paidLeave'] ?? 6; // Handle legacy data
+  int get optionalHoliday =>
+      leaveBalance['optionalHoliday'] ??
+      leaveBalance['optionalLeave'] ??
+      3; // Handle legacy data
+
   // Total leave balance
-  int get totalLeaveBalance => sickLeave + casualLeave + paidLeave + optionalHoliday;
-  
+  int get totalLeaveBalance =>
+      sickLeave + casualLeave + paidLeave + optionalHoliday;
+
   // Validation method for employee data
   bool get isEmployeeDataComplete {
-    if (!isEmployee) return true; // Non-employees don't need empCode/department/joiningDate
+    if (!isEmployee)
+      return true; // Non-employees don't need empCode/department/joiningDate
     return hasEmpCode && hasDepartment && hasJoiningDate;
   }
-  
+
   // Get initials for avatar
   String get initials {
     final names = name.trim().split(' ');

@@ -21,10 +21,12 @@ class EmployeeService {
     int? optionalHoliday,
     String? employmentType,
     double? workingHours,
+    double? salary,
+    String? companyName,
   }) async {
     try {
       final callable = _functions.httpsCallable('createEmployee');
-      
+
       final result = await callable.call({
         'name': name,
         'email': email,
@@ -38,6 +40,8 @@ class EmployeeService {
         'role': 'employee', // Always create as employee role
         'employmentType': employmentType,
         'workingHours': workingHours,
+        'salary': salary,
+        'companyName': companyName,
         'leaveBalance': {
           'sickLeave': sickLeave ?? 6,
           'casualLeave': casualLeave ?? 6,
@@ -47,7 +51,7 @@ class EmployeeService {
       });
 
       final data = result.data as Map<String, dynamic>;
-      
+
       if (data['success'] == true) {
         return CreateEmployeeResult(
           success: true,
@@ -63,10 +67,7 @@ class EmployeeService {
       }
     } catch (e) {
       print('Error creating employee: $e');
-      return CreateEmployeeResult(
-        success: false,
-        error: _getErrorMessage(e),
-      );
+      return CreateEmployeeResult(success: false, error: _getErrorMessage(e));
     }
   }
 
@@ -75,7 +76,7 @@ class EmployeeService {
     try {
       final callable = FirebaseFunctions.instance.httpsCallable('getEmployees');
       final result = await callable.call();
-      
+
       if (result.data['success']) {
         final List<dynamic> employeesList = result.data['employees'];
         return employeesList.map((e) {
@@ -95,10 +96,10 @@ class EmployeeService {
   Map<String, dynamic> _deepConvertMap(dynamic data) {
     if (data is Map) {
       return Map<String, dynamic>.fromEntries(
-        data.entries.map((entry) => MapEntry(
-          entry.key.toString(),
-          _deepConvertValue(entry.value),
-        )),
+        data.entries.map(
+          (entry) =>
+              MapEntry(entry.key.toString(), _deepConvertValue(entry.value)),
+        ),
       );
     }
     throw ArgumentError('Expected Map but got ${data.runtimeType}');
@@ -120,7 +121,7 @@ class EmployeeService {
     try {
       final callable = FirebaseFunctions.instance.httpsCallable('getTeammates');
       final result = await callable.call();
-      
+
       if (result.data['success']) {
         final List<dynamic> teammatesList = result.data['employees'];
         return teammatesList.map((e) => _deepConvertMap(e)).toList();
@@ -135,14 +136,18 @@ class EmployeeService {
 
   Future<List<Map<String, dynamic>>> getAdminUsers() async {
     try {
-      final callable = FirebaseFunctions.instance.httpsCallable('getAdminUsers');
+      final callable = FirebaseFunctions.instance.httpsCallable(
+        'getAdminUsers',
+      );
       final result = await callable.call();
-      
+
       if (result.data['success']) {
         final List<dynamic> adminUsersList = result.data['adminUsers'];
         return adminUsersList.map((e) => _deepConvertMap(e)).toList();
       } else {
-        throw Exception(result.data['message'] ?? 'Failed to fetch admin users');
+        throw Exception(
+          result.data['message'] ?? 'Failed to fetch admin users',
+        );
       }
     } catch (e) {
       print('Error fetching admin users: $e');
@@ -168,6 +173,8 @@ class EmployeeService {
     int? optionalHoliday,
     String? employmentType,
     double? workingHours,
+    double? salary,
+    String? companyName,
   }) async {
     try {
       final callable = _functions.httpsCallable('updateEmployee');
@@ -184,6 +191,8 @@ class EmployeeService {
         'address': address,
         'employmentType': employmentType,
         'workingHours': workingHours,
+        'salary': salary,
+        'companyName': companyName,
         'leaveBalance': {
           'sickLeave': sickLeave,
           'casualLeave': casualLeave,
@@ -193,7 +202,7 @@ class EmployeeService {
       });
 
       final data = result.data as Map<String, dynamic>;
-      
+
       if (data['success'] == true) {
         return UpdateEmployeeResult(success: true);
       } else {
@@ -204,10 +213,7 @@ class EmployeeService {
       }
     } catch (e) {
       print('Error updating employee: $e');
-      return UpdateEmployeeResult(
-        success: false,
-        error: _getErrorMessage(e),
-      );
+      return UpdateEmployeeResult(success: false, error: _getErrorMessage(e));
     }
   }
 
@@ -215,12 +221,10 @@ class EmployeeService {
   Future<DeleteEmployeeResult> deleteEmployee({required String uid}) async {
     try {
       final callable = _functions.httpsCallable('deleteEmployee');
-      final result = await callable.call({
-        'uid': uid,
-      });
+      final result = await callable.call({'uid': uid});
 
       final data = result.data as Map<String, dynamic>;
-      
+
       if (data['success'] == true) {
         return DeleteEmployeeResult(success: true);
       } else {
@@ -231,10 +235,7 @@ class EmployeeService {
       }
     } catch (e) {
       print('Error deleting employee: $e');
-      return DeleteEmployeeResult(
-        success: false,
-        error: _getErrorMessage(e),
-      );
+      return DeleteEmployeeResult(success: false, error: _getErrorMessage(e));
     }
   }
 
@@ -245,14 +246,11 @@ class EmployeeService {
   }) async {
     try {
       final callable = _functions.httpsCallable('updateEmployeeStatus');
-      
-      final result = await callable.call({
-        'uid': uid,
-        'isActive': isActive,
-      });
+
+      final result = await callable.call({'uid': uid, 'isActive': isActive});
 
       final data = result.data as Map<String, dynamic>;
-      
+
       if (data['success'] == true) {
         return UpdateEmployeeStatusResult(success: true);
       } else {
@@ -290,7 +288,7 @@ class EmployeeService {
   }) async {
     try {
       final callable = _functions.httpsCallable('createEmployee');
-      
+
       final result = await callable.call({
         'name': name,
         'email': email,
@@ -313,7 +311,7 @@ class EmployeeService {
       });
 
       final data = result.data as Map<String, dynamic>;
-      
+
       if (data['success'] == true) {
         return CreateEmployeeResult(
           success: true,
@@ -329,10 +327,7 @@ class EmployeeService {
       }
     } catch (e) {
       print('Error creating admin user: $e');
-      return CreateEmployeeResult(
-        success: false,
-        error: _getErrorMessage(e),
-      );
+      return CreateEmployeeResult(success: false, error: _getErrorMessage(e));
     }
   }
 
@@ -390,28 +385,19 @@ class UpdateEmployeeStatusResult {
   final bool success;
   final String? error;
 
-  UpdateEmployeeStatusResult({
-    required this.success,
-    this.error,
-  });
+  UpdateEmployeeStatusResult({required this.success, this.error});
 }
 
 class UpdateEmployeeResult {
   final bool success;
   final String? error;
 
-  UpdateEmployeeResult({
-    required this.success,
-    this.error,
-  });
+  UpdateEmployeeResult({required this.success, this.error});
 }
 
 class DeleteEmployeeResult {
   final bool success;
   final String? error;
 
-  DeleteEmployeeResult({
-    required this.success,
-    this.error,
-  });
+  DeleteEmployeeResult({required this.success, this.error});
 }

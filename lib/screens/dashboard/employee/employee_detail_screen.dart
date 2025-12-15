@@ -1,14 +1,12 @@
-  import 'package:flutter/material.dart';
+import 'package:flutter/material.dart';
 import '../../../models/user_model.dart';
 import '../admin/edit_employee_screen.dart';
 
 class EmployeeDetailScreen extends StatefulWidget {
   final AppUser employee;
 
-  const EmployeeDetailScreen({
-    Key? key,
-    required this.employee,
-  }) : super(key: key);
+  const EmployeeDetailScreen({Key? key, required this.employee})
+    : super(key: key);
 
   @override
   State<EmployeeDetailScreen> createState() => _EmployeeDetailScreenState();
@@ -49,10 +47,11 @@ class _EmployeeDetailScreenState extends State<EmployeeDetailScreen> {
               final updatedEmployee = await Navigator.push<AppUser>(
                 context,
                 MaterialPageRoute(
-                  builder: (context) => EditEmployeeScreen(employee: currentEmployee),
+                  builder: (context) =>
+                      EditEmployeeScreen(employee: currentEmployee),
                 ),
               );
-              
+
               // Update the state if employee was updated
               if (updatedEmployee != null) {
                 setState(() {
@@ -89,7 +88,9 @@ class _EmployeeDetailScreenState extends State<EmployeeDetailScreen> {
                     radius: 50,
                     backgroundColor: const Color(0xFF4A90E2).withOpacity(0.1),
                     child: Text(
-                      currentEmployee.name.isNotEmpty ? currentEmployee.name[0].toUpperCase() : 'U',
+                      currentEmployee.name.isNotEmpty
+                          ? currentEmployee.name[0].toUpperCase()
+                          : 'U',
                       style: const TextStyle(
                         fontSize: 32,
                         fontWeight: FontWeight.bold,
@@ -130,14 +131,19 @@ class _EmployeeDetailScreenState extends State<EmployeeDetailScreen> {
                   const SizedBox(height: 16),
                   // Status Badge
                   Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 16,
+                      vertical: 8,
+                    ),
                     decoration: BoxDecoration(
-                      color: currentEmployee.isActive 
+                      color: currentEmployee.isActive
                           ? Colors.green.withOpacity(0.1)
                           : Colors.red.withOpacity(0.1),
                       borderRadius: BorderRadius.circular(20),
                       border: Border.all(
-                        color: currentEmployee.isActive ? Colors.green : Colors.red,
+                        color: currentEmployee.isActive
+                            ? Colors.green
+                            : Colors.red,
                       ),
                     ),
                     child: Row(
@@ -147,7 +153,9 @@ class _EmployeeDetailScreenState extends State<EmployeeDetailScreen> {
                           width: 8,
                           height: 8,
                           decoration: BoxDecoration(
-                            color: currentEmployee.isActive ? Colors.green : Colors.red,
+                            color: currentEmployee.isActive
+                                ? Colors.green
+                                : Colors.red,
                             shape: BoxShape.circle,
                           ),
                         ),
@@ -155,7 +163,9 @@ class _EmployeeDetailScreenState extends State<EmployeeDetailScreen> {
                         Text(
                           currentEmployee.isActive ? 'Active' : 'Inactive',
                           style: TextStyle(
-                            color: currentEmployee.isActive ? Colors.green : Colors.red,
+                            color: currentEmployee.isActive
+                                ? Colors.green
+                                : Colors.red,
                             fontWeight: FontWeight.bold,
                           ),
                         ),
@@ -167,60 +177,91 @@ class _EmployeeDetailScreenState extends State<EmployeeDetailScreen> {
             ),
 
             // Contact Information
-            _buildInfoSection(
-              'Contact Information',
-              [
-                _buildInfoRow('Email', currentEmployee.email, Icons.email),
-                if (currentEmployee.phoneNumber != null && currentEmployee.phoneNumber!.isNotEmpty)
-                  _buildInfoRow('Phone', currentEmployee.phoneNumber!, Icons.phone),
-                if (currentEmployee.address != null && currentEmployee.address!.isNotEmpty)
-                  _buildInfoRow('Address', currentEmployee.address!, Icons.location_on),
-              ],
-            ),
+            _buildInfoSection('Contact Information', [
+              _buildInfoRow('Email', currentEmployee.email, Icons.email),
+              if (currentEmployee.phoneNumber != null &&
+                  currentEmployee.phoneNumber!.isNotEmpty)
+                _buildInfoRow(
+                  'Phone',
+                  currentEmployee.phoneNumber!,
+                  Icons.phone,
+                ),
+              if (currentEmployee.address != null &&
+                  currentEmployee.address!.isNotEmpty)
+                _buildInfoRow(
+                  'Address',
+                  currentEmployee.address!,
+                  Icons.location_on,
+                ),
+            ]),
 
             // Work Information
-            _buildInfoSection(
-              'Work Information',
-              [
-                _buildInfoRow('Role', currentEmployee.role.toString().split('.').last.toUpperCase(), Icons.work),
-                if (currentEmployee.designation != null && currentEmployee.designation!.isNotEmpty)
-                  _buildInfoRow('Designation', currentEmployee.designation!, Icons.badge),
-                _buildInfoRow('Department', currentEmployee.displayDepartment, Icons.business),
-                _buildInfoRow('Employment Type', currentEmployee.displayEmploymentType, Icons.work_history_outlined),
-                _buildInfoRow('Working Hours', currentEmployee.displayWorkingHours, Icons.access_time_outlined),
-                if (currentEmployee.joiningDate != null)
-                  _buildInfoRow(
-                    'Joining Date', 
-                    currentEmployee.displayJoiningDateFormatted,
-                    Icons.calendar_today
-                  ),
-              ],
-            ),
+            _buildInfoSection('Work Information', [
+              _buildInfoRow(
+                'Role',
+                currentEmployee.role.toString().split('.').last.toUpperCase(),
+                Icons.work,
+              ),
+              if (currentEmployee.designation != null &&
+                  currentEmployee.designation!.isNotEmpty)
+                _buildInfoRow(
+                  'Designation',
+                  currentEmployee.designation!,
+                  Icons.badge,
+                ),
+              _buildInfoRow(
+                'Department',
+                currentEmployee.displayDepartment,
+                Icons.business,
+              ),
+              _buildInfoRow(
+                'Employment Type',
+                currentEmployee.displayEmploymentType,
+                Icons.work_history_outlined,
+              ),
+              _buildInfoRow(
+                'Working Hours',
+                currentEmployee.displayWorkingHours,
+                Icons.access_time_outlined,
+              ),
+              if (currentEmployee.salary != null)
+                _buildInfoRow(
+                  'Salary',
+                  currentEmployee.displaySalary,
+                  Icons.currency_rupee_outlined,
+                ),
+              if (currentEmployee.companyName != null &&
+                  currentEmployee.companyName!.isNotEmpty)
+                _buildInfoRow(
+                  'Company',
+                  currentEmployee.displayCompanyName,
+                  Icons.domain,
+                ),
+              if (currentEmployee.joiningDate != null)
+                _buildInfoRow(
+                  'Joining Date',
+                  currentEmployee.displayJoiningDateFormatted,
+                  Icons.calendar_today,
+                ),
+            ]),
 
             // Personal Information
-            _buildInfoSection(
-              'Personal Information',
-              [
-                if (currentEmployee.dateOfBirth != null) ...[
-                  _buildInfoRow(
-                    'Date of Birth',
-                    _formatDate(currentEmployee.dateOfBirth!),
-                    Icons.cake,
-                  ),
-                  _buildInfoRow(
-                    'Age',
-                    '${_calculateAge(currentEmployee.dateOfBirth!)} years old',
-                    Icons.person,
-                  ),
-                ] else ...[
-                  _buildInfoRow(
-                    'Date of Birth',
-                    'Not specified',
-                    Icons.cake,
-                  ),
-                ],
+            _buildInfoSection('Personal Information', [
+              if (currentEmployee.dateOfBirth != null) ...[
+                _buildInfoRow(
+                  'Date of Birth',
+                  _formatDate(currentEmployee.dateOfBirth!),
+                  Icons.cake,
+                ),
+                _buildInfoRow(
+                  'Age',
+                  '${_calculateAge(currentEmployee.dateOfBirth!)} years old',
+                  Icons.person,
+                ),
+              ] else ...[
+                _buildInfoRow('Date of Birth', 'Not specified', Icons.cake),
               ],
-            ),
+            ]),
 
             // Leave Balance
             if (currentEmployee.leaveBalance.isNotEmpty)
@@ -273,11 +314,7 @@ class _EmployeeDetailScreenState extends State<EmployeeDetailScreen> {
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Icon(
-            icon,
-            size: 20,
-            color: const Color(0xFF4A90E2),
-          ),
+          Icon(icon, size: 20, color: const Color(0xFF4A90E2)),
           const SizedBox(width: 12),
           Expanded(
             child: Column(
@@ -390,7 +427,7 @@ class _EmployeeDetailScreenState extends State<EmployeeDetailScreen> {
         return 'Casual Leave';
       case 'paidleave':
       case 'paid':
-      // Keep for backward compatibility with old data
+        // Keep for backward compatibility with old data
         return 'Paid Leave';
       case 'optionalholiday':
       case 'optional':
@@ -406,17 +443,27 @@ class _EmployeeDetailScreenState extends State<EmployeeDetailScreen> {
 
   String _formatDate(DateTime date) {
     List<String> months = [
-      'January', 'February', 'March', 'April', 'May', 'June',
-      'July', 'August', 'September', 'October', 'November', 'December'
+      'January',
+      'February',
+      'March',
+      'April',
+      'May',
+      'June',
+      'July',
+      'August',
+      'September',
+      'October',
+      'November',
+      'December',
     ];
-    
+
     return '${date.day} ${months[date.month - 1]} ${date.year}';
   }
 
   int _calculateAge(DateTime birthDate) {
     final now = DateTime.now();
     int age = now.year - birthDate.year;
-    if (now.month < birthDate.month || 
+    if (now.month < birthDate.month ||
         (now.month == birthDate.month && now.day < birthDate.day)) {
       age--;
     }
